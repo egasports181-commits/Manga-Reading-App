@@ -1,0 +1,6 @@
+{
+  "name": "Koma",
+  "description": "Extensible manga, manhwa, manhua, and webtoon reader with modular source repositories, customizable reader, offline downloads, library categories, tracking, and backups.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

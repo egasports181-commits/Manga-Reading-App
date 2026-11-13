@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Koma</string>
+    <string name="nav_home">Home</string>
+    <string name="nav_sources">Sources</string>
+    <string name="nav_library">Library</string>
+    <string name="nav_updates">Updates</string>
+    <string name="nav_more">More</string>
+    <string name="demo_mode_badge">DEMO MODE • SAMPLE DATA</string>
+    <string name="error_network">Network unavailable. Check your connection and try again.</string>
+    <string name="error_generic">Something went wrong. Please try again.</string>
+</resources>
