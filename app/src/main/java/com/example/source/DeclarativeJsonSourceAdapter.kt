@@ -1,6 +1,7 @@
 package com.example.source
 
 import com.example.domain.model.*
+import com.example.network.NetworkErrorFormatter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -28,12 +29,34 @@ class DeclarativeJsonSourceAdapter(
     override val supportsFilters: Boolean = false
     override val supportsLogin: Boolean = false
 
-    override suspend fun isAvailable(): Boolean = withContext(Dispatchers.IO) {
-        if (!baseUrl.startsWith("https://")) return@withContext false
-        runCatching {
+    override suspend fun isAvailable(): Boolean = checkStatus().isOnline
+
+    override suspend fun checkStatus(): SourceHealthStatus = withContext(Dispatchers.IO) {
+        if (!baseUrl.startsWith("https://")) {
+            return@withContext SourceHealthStatus(
+                isOnline = false,
+                errorReason = "HTTPS endpoint required"
+            )
+        }
+        val start = System.currentTimeMillis()
+        try {
             val req = Request.Builder().url(baseUrl).head().build()
-            httpClient.newCall(req).execute().use { it.code < 500 }
-        }.getOrDefault(false)
+            httpClient.newCall(req).execute().use { resp ->
+                val elapsed = (System.currentTimeMillis() - start).coerceAtLeast(1L)
+                SourceHealthStatus(
+                    isOnline = resp.code < 500,
+                    latencyMs = elapsed,
+                    httpStatus = resp.code,
+                    errorReason = if (resp.code >= 500) "HTTP ${resp.code}" else null
+                )
+            }
+        } catch (e: Exception) {
+            SourceHealthStatus(
+                isOnline = false,
+                latencyMs = (System.currentTimeMillis() - start).coerceAtLeast(1L),
+                errorReason = NetworkErrorFormatter.describe(e)
+            )
+        }
     }
 
     override suspend fun getPopular(page: Int, filters: SearchFilters): SourcePagedResult =
@@ -140,7 +163,7 @@ class DeclarativeJsonSourceAdapter(
     }
 
     private fun executeGet(url: String): String {
-        val req = Request.Builder().url(url).header("User-Agent", "KomaAndroidReader/1.0").get().build()
+        val req = Request.Builder().url(url).header("Accept", "application/json").get().build()
         httpClient.newCall(req).execute().use { resp ->
             val body = resp.body?.string() ?: throw IOException("Empty response")
             if (!resp.isSuccessful) throw IOException("HTTP ${resp.code}")

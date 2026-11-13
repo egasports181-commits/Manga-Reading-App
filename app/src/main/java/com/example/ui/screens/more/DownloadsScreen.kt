@@ -15,6 +15,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.ui.components.KomaEmptyState
+import com.example.ui.components.LiquidGlassTopBar
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -27,13 +28,14 @@ fun DownloadsScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
+            LiquidGlassTopBar(
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 },
-                title = { Text("Download Manager") },
+                title = "Download Manager",
+                subtitle = "${state.downloadQueue.size} queued • ${state.downloadedChapters.size} offline",
                 actions = {
                     IconButton(onClick = viewModel::cleanupReadDownloads) {
                         Icon(Icons.Default.CleaningServices, contentDescription = "Clean up read downloads")
@@ -68,6 +70,24 @@ fun DownloadsScreen(
                             progress = { (usedMb / limitMb.toFloat()).coerceIn(0f, 1f) },
                             modifier = Modifier.fillMaxWidth()
                         )
+                        if (state.storageBySource.isNotEmpty()) {
+                            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                            Text("Storage by Source", style = MaterialTheme.typography.labelLarge)
+                            state.storageBySource.forEach { (sourceId, bytes) ->
+                                val mb = bytes / (1024f * 1024f)
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(sourceId, style = MaterialTheme.typography.bodySmall)
+                                    Text(
+                                        if (mb >= 1f) "${"%.1f".format(mb)} MB" else "${bytes / 1024} KB",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                            }
+                        }
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -98,13 +118,19 @@ fun DownloadsScreen(
                             ) {
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(task.mangaTitle, style = MaterialTheme.typography.titleSmall)
+                                    val retryLabel = if (task.retryCount > 0) " • Retry ${task.retryCount}" else ""
                                     Text(
-                                        "${task.chapterName} • ${task.status} (${task.downloadedPages}/${task.totalPages})",
+                                        "${task.chapterName} • ${task.status} (${task.downloadedPages}/${task.totalPages})$retryLabel",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
                                 Row {
+                                    if (task.status == "QUEUED" || task.status == "PAUSED") {
+                                        IconButton(onClick = { viewModel.moveDownloadToTop(task.chapterId) }) {
+                                            Icon(Icons.Default.VerticalAlignTop, contentDescription = "Move to top")
+                                        }
+                                    }
                                     when (task.status) {
                                         "DOWNLOADING", "QUEUED" -> {
                                             IconButton(onClick = { viewModel.pauseDownload(task.chapterId) }) {

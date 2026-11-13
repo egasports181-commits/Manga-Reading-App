@@ -15,6 +15,7 @@ import com.example.data.repository.DownloadRepository
 import com.example.data.repository.MangaRepository
 import com.example.data.repository.TrackingRepository
 import com.example.domain.model.*
+import com.example.network.DnsMode
 import com.example.ui.theme.AccentPreset
 import com.example.ui.theme.ThemeMode
 import kotlinx.coroutines.Dispatchers
@@ -27,6 +28,7 @@ data class MoreUiState(
     val prefs: UserPreferences = UserPreferences(),
     val downloadQueue: List<DownloadTaskEntity> = emptyList(),
     val downloadedChapters: List<ChapterEntity> = emptyList(),
+    val storageBySource: Map<String, Long> = emptyMap(),
     val stats: ReadingStatsSummary = ReadingStatsSummary(),
     val imageCacheBytes: Long = 0L,
     val statusMessage: String? = null,
@@ -58,10 +60,18 @@ class MoreViewModel(
         mangaRepo.observeStats(),
         localInfo
     ) { prefs, queue, downloaded, stats, info ->
+        val bySource = downloaded
+            .groupBy { ch -> ch.mangaId.substringBefore("::").ifBlank { "unknown" } }
+            .mapValues { (_, list) -> list.sumOf { it.sizeBytes } }
+            .toList()
+            .sortedByDescending { it.second }
+            .toMap()
+
         MoreUiState(
             prefs = prefs,
             downloadQueue = queue,
             downloadedChapters = downloaded,
+            storageBySource = bySource,
             stats = stats,
             imageCacheBytes = info.cacheBytes,
             statusMessage = info.statusMsg,
@@ -140,6 +150,10 @@ class MoreViewModel(
     // Download Controls
     fun pauseDownload(chapterId: String) = viewModelScope.launch { downloadRepo.pauseDownload(chapterId) }
     fun resumeDownload(chapterId: String) = viewModelScope.launch { downloadRepo.resumeOrRetryDownload(chapterId) }
+    fun moveDownloadToTop(chapterId: String) = viewModelScope.launch {
+        downloadRepo.moveToTop(chapterId)
+        localInfo.update { it.copy(statusMsg = "Moved download to top of queue.") }
+    }
     fun cancelDownload(chapterId: String) = viewModelScope.launch { downloadRepo.cancelDownload(chapterId) }
     fun clearCompletedDownloads() = viewModelScope.launch { downloadRepo.clearCompletedQueue() }
     fun deleteDownloadedChapter(ch: ChapterEntity) = viewModelScope.launch { downloadRepo.deleteDownloadedChapter(ch) }
@@ -179,6 +193,8 @@ class MoreViewModel(
         prefsRepo.setDemoMode(enabled)
         if (!enabled) mangaRepo.removeDemoData()
     }
+    fun setDnsMode(mode: DnsMode) = viewModelScope.launch { prefsRepo.setDnsMode(mode) }
+    fun setPreferIpv4(prefer: Boolean) = viewModelScope.launch { prefsRepo.setPreferIpv4(prefer) }
     fun setDefaultReadingMode(mode: ReadingMode) = viewModelScope.launch { prefsRepo.setDefaultReadingMode(mode) }
     fun setDefaultScaleMode(mode: ImageScaleMode) = viewModelScope.launch { prefsRepo.setDefaultScaleMode(mode) }
     fun setReaderBg(bg: ReaderBackground) = viewModelScope.launch { prefsRepo.setReaderBackground(bg) }
@@ -190,6 +206,7 @@ class MoreViewModel(
     fun setUpdateNotifs(enabled: Boolean) = viewModelScope.launch { prefsRepo.setUpdateNotifications(enabled) }
     fun setWifiOnly(enabled: Boolean) = viewModelScope.launch { prefsRepo.setWifiOnlyDownloads(enabled) }
     fun setConcurrentDownloads(count: Int) = viewModelScope.launch { prefsRepo.setConcurrentDownloads(count) }
+    fun setDownloadMaxRetries(retries: Int) = viewModelScope.launch { prefsRepo.setDownloadMaxRetries(retries) }
     fun setStorageLimitMb(mb: Int) = viewModelScope.launch { prefsRepo.setStorageLimitMb(mb) }
     fun setAutoDownloadNew(enabled: Boolean) = viewModelScope.launch { prefsRepo.setAutoDownloadNew(enabled) }
     fun setAutoCleanupRead(enabled: Boolean) = viewModelScope.launch { prefsRepo.setAutoCleanupRead(enabled) }

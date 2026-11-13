@@ -4,7 +4,6 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
-import androidx.room.Transaction
 import androidx.room.Update
 import com.example.data.local.entity.*
 import kotlinx.coroutines.flow.Flow
@@ -135,6 +134,9 @@ interface ChapterDao {
     @Query("UPDATE chapters SET isBookmarked = :isBookmarked WHERE id = :chapterId")
     suspend fun setChapterBookmarked(chapterId: String, isBookmarked: Boolean)
 
+    @Query("UPDATE chapters SET bookmarkedPagesJson = :json WHERE id = :chapterId")
+    suspend fun updateBookmarkedPages(chapterId: String, json: String)
+
     @Query("UPDATE chapters SET lastPageRead = :page, totalPages = :totalPages, isRead = :isRead WHERE id = :chapterId")
     suspend fun updateReadingPosition(chapterId: String, page: Int, totalPages: Int, isRead: Boolean)
 
@@ -159,11 +161,17 @@ interface HistoryDao {
 
 @Dao
 interface ExtensionDao {
-    @Query("SELECT * FROM extension_repos ORDER BY id ASC")
+    @Query("SELECT * FROM extension_repos ORDER BY isBuiltIn DESC, id ASC")
     fun observeRepos(): Flow<List<ExtensionRepoEntity>>
+
+    @Query("SELECT * FROM extension_repos ORDER BY id ASC")
+    suspend fun getReposOnce(): List<ExtensionRepoEntity>
 
     @Query("SELECT * FROM extension_repos WHERE id = :repoId")
     suspend fun getRepoById(repoId: Long): ExtensionRepoEntity?
+
+    @Query("SELECT * FROM extension_repos WHERE indexUrl = :indexUrl LIMIT 1")
+    suspend fun getRepoByUrl(indexUrl: String): ExtensionRepoEntity?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertRepo(repo: ExtensionRepoEntity): Long
@@ -174,11 +182,17 @@ interface ExtensionDao {
     @Query("DELETE FROM extension_packages WHERE repoId = :repoId AND isInstalled = 0")
     suspend fun deleteUninstalledFromRepo(repoId: Long)
 
-    @Query("SELECT * FROM extension_packages ORDER BY popularity DESC, name ASC")
+    @Query("SELECT * FROM extension_packages ORDER BY isInstalled DESC, popularity DESC, name ASC")
     fun observePackages(): Flow<List<ExtensionPackageEntity>>
+
+    @Query("SELECT * FROM extension_packages")
+    suspend fun getPackagesOnce(): List<ExtensionPackageEntity>
 
     @Query("SELECT * FROM extension_packages WHERE isInstalled = 1 AND isEnabled = 1 AND format = 'koma_json_v1'")
     fun observeActiveKomaPackages(): Flow<List<ExtensionPackageEntity>>
+
+    @Query("SELECT * FROM extension_packages WHERE isInstalled = 1 AND isEnabled = 1")
+    fun observeInstalledEnabledPackages(): Flow<List<ExtensionPackageEntity>>
 
     @Query("SELECT * FROM extension_packages WHERE pkgId = :pkgId")
     suspend fun getPackage(pkgId: String): ExtensionPackageEntity?
@@ -192,13 +206,34 @@ interface ExtensionDao {
     @Query("UPDATE extension_packages SET isEnabled = :enabled WHERE pkgId = :pkgId")
     suspend fun setPackageEnabled(pkgId: String, enabled: Boolean)
 
-    @Query("UPDATE extension_packages SET isInstalled = 0, hasUpdate = 0 WHERE pkgId = :pkgId")
+    @Query("UPDATE extension_packages SET isInstalled = 0, hasUpdate = 0, localApkPath = '', installError = NULL WHERE pkgId = :pkgId")
     suspend fun uninstallPackage(pkgId: String)
+
+    @Query("SELECT * FROM extension_install_history ORDER BY timestamp DESC LIMIT 50")
+    fun observeInstallHistory(): Flow<List<ExtensionInstallHistoryEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertInstallHistory(entry: ExtensionInstallHistoryEntity)
+
+    @Query("SELECT * FROM extension_cookies")
+    suspend fun getAllCookiesOnce(): List<ExtensionCookieEntity>
+
+    @Query("SELECT * FROM extension_cookies WHERE host = :host")
+    suspend fun getCookiesForHost(host: String): List<ExtensionCookieEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertCookies(cookies: List<ExtensionCookieEntity>)
+
+    @Query("DELETE FROM extension_cookies WHERE host = :host")
+    suspend fun deleteCookiesForHost(host: String)
+
+    @Query("DELETE FROM extension_cookies")
+    suspend fun clearAllCookies()
 }
 
 @Dao
 interface DownloadDao {
-    @Query("SELECT * FROM download_tasks ORDER BY createdAt ASC")
+    @Query("SELECT * FROM download_tasks ORDER BY priority DESC, createdAt ASC")
     fun observeDownloadQueue(): Flow<List<DownloadTaskEntity>>
 
     @Query("SELECT * FROM download_tasks WHERE chapterId = :chapterId")
@@ -206,6 +241,9 @@ interface DownloadDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertTask(task: DownloadTaskEntity)
+
+    @Query("UPDATE download_tasks SET priority = :priority WHERE chapterId = :chapterId")
+    suspend fun updatePriority(chapterId: String, priority: Int)
 
     @Query("UPDATE download_tasks SET status = :status, progress = :progress, downloadedPages = :downloadedPages, totalPages = :totalPages, errorMessage = :error, bytesDownloaded = :bytes WHERE chapterId = :chapterId")
     suspend fun updateProgress(

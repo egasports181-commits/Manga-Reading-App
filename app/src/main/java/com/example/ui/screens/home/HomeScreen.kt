@@ -1,10 +1,14 @@
 package com.example.ui.screens.home
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -24,35 +28,22 @@ fun HomeScreen(
     viewModel: HomeViewModel,
     onOpenManga: (String) -> Unit,
     onNavigateToSources: () -> Unit,
+    onOpenSource: (String) -> Unit = { onNavigateToSources() },
     onNavigateToLibrary: () -> Unit,
     onNavigateToDownloads: () -> Unit
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     var showCustomizeSheet by remember { mutableStateOf(false) }
+    val cardWidth = if (state.compactCards) 118.dp else 144.dp
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        Text("Koma", style = MaterialTheme.typography.headlineMedium)
-                        if (state.demoModeEnabled) {
-                            Surface(
-                                color = MaterialTheme.colorScheme.secondary.copy(alpha = 0.18f),
-                                shape = MaterialTheme.shapes.small
-                            ) {
-                                Text(
-                                    text = "DEMO",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.secondary,
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                                )
-                            }
-                        }
-                    }
+            LiquidGlassTopBar(
+                title = if (state.demoModeEnabled) "Koma • Demo Mode" else "Koma",
+                subtitle = if (state.continueReading.isNotEmpty()) {
+                    "${state.continueReading.size} active series • ${state.favoriteSources.size} sources ready"
+                } else {
+                    "${state.favoriteSources.size} active sources"
                 },
                 actions = {
                     IconButton(
@@ -67,10 +58,7 @@ fun HomeScreen(
                     ) {
                         Icon(Icons.Default.Tune, contentDescription = "Customize home sections")
                     }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background
-                )
+                }
             )
         }
     ) { padding ->
@@ -86,7 +74,7 @@ fun HomeScreen(
                         )
                     )
                 ),
-            contentPadding = PaddingValues(bottom = 28.dp),
+            contentPadding = PaddingValues(top = 12.dp, bottom = 104.dp),
             verticalArrangement = Arrangement.spacedBy(18.dp)
         ) {
             item {
@@ -147,64 +135,81 @@ fun HomeScreen(
                         icon = Icons.Default.PlayCircleOutline,
                         items = state.continueReading,
                         onItemClick = onCardClick,
-                        onActionClick = onNavigateToLibrary
+                        onActionClick = onNavigateToLibrary,
+                        cardWidth = cardWidth
                     )
+                    HomeSectionType.FAVORITE_SOURCES -> if (state.favoriteSources.isNotEmpty()) {
+                        FavoriteSourcesStrip(
+                            sources = state.favoriteSources,
+                            onOpenSource = onOpenSource,
+                            onSeeAll = onNavigateToSources
+                        )
+                    }
                     HomeSectionType.RECENTLY_UPDATED -> HorizontalMangaSection(
                         title = section.title,
                         icon = Icons.Default.NewReleases,
                         items = state.recentlyUpdated,
-                        onItemClick = onCardClick
+                        onItemClick = onCardClick,
+                        cardWidth = cardWidth
                     )
                     HomeSectionType.RECENTLY_ADDED -> HorizontalMangaSection(
                         title = section.title,
                         icon = Icons.Default.BookmarkAdded,
                         items = state.recentlyAdded,
                         onItemClick = onCardClick,
-                        onActionClick = onNavigateToLibrary
+                        onActionClick = onNavigateToLibrary,
+                        cardWidth = cardWidth
                     )
                     HomeSectionType.POPULAR_MANGA -> HorizontalMangaSection(
                         title = section.title,
                         icon = Icons.Default.Whatshot,
                         items = state.popularManga,
                         onItemClick = onCardClick,
-                        onActionClick = onNavigateToSources
+                        onActionClick = onNavigateToSources,
+                        cardWidth = cardWidth
                     )
                     HomeSectionType.TRENDING_MANGA -> HorizontalMangaSection(
                         title = section.title,
                         icon = Icons.Default.TrendingUp,
                         items = state.trendingManga,
-                        onItemClick = onCardClick
+                        onItemClick = onCardClick,
+                        cardWidth = cardWidth
                     )
                     HomeSectionType.LATEST_CHAPTERS -> HorizontalMangaSection(
                         title = section.title,
                         icon = Icons.Default.Update,
                         items = state.latestChapters,
-                        onItemClick = onCardClick
+                        onItemClick = onCardClick,
+                        cardWidth = cardWidth
                     )
                     HomeSectionType.RECOMMENDED_SERIES -> HorizontalMangaSection(
                         title = section.title,
                         icon = Icons.Default.AutoAwesome,
                         items = state.recommendedSeries,
-                        onItemClick = onCardClick
+                        onItemClick = onCardClick,
+                        cardWidth = cardWidth
                     )
                     HomeSectionType.RECENTLY_DOWNLOADED -> HorizontalMangaSection(
                         title = section.title,
                         icon = Icons.Default.DownloadDone,
                         items = state.recentlyDownloaded,
                         onItemClick = onCardClick,
-                        onActionClick = onNavigateToDownloads
+                        onActionClick = onNavigateToDownloads,
+                        cardWidth = cardWidth
                     )
                     HomeSectionType.READING_HISTORY -> HorizontalMangaSection(
                         title = section.title,
                         icon = Icons.Default.History,
                         items = state.readingHistory,
-                        onItemClick = onCardClick
+                        onItemClick = onCardClick,
+                        cardWidth = cardWidth
                     )
                     HomeSectionType.PERSONALIZED -> HorizontalMangaSection(
                         title = section.title,
                         icon = Icons.Default.Recommend,
                         items = state.personalized,
-                        onItemClick = onCardClick
+                        onItemClick = onCardClick,
+                        cardWidth = cardWidth
                     )
                 }
             }
@@ -220,18 +225,38 @@ fun HomeScreen(
                     .padding(bottom = 28.dp)
             ) {
                 Text(
-                    text = "Customize Home Sections",
+                    text = "Customize Home Layout",
                     style = MaterialTheme.typography.headlineSmall
                 )
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    text = "Reorder carousels or toggle visibility.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                Spacer(Modifier.height(8.dp))
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    shape = MaterialTheme.shapes.medium
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Compact Cover Density", style = MaterialTheme.typography.titleSmall)
+                            Text(
+                                "Fit more covers across horizontal carousels",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = state.compactCards,
+                            onCheckedChange = viewModel::toggleCompactCards
+                        )
+                    }
+                }
                 Spacer(Modifier.height(12.dp))
                 LazyColumn(
-                    modifier = Modifier.heightIn(max = 420.dp),
+                    modifier = Modifier.heightIn(max = 380.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     itemsIndexed(state.sectionOrder, key = { _, s -> s.id }) { index, section ->
@@ -269,6 +294,67 @@ fun HomeScreen(
                                     Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Move down")
                                 }
                             }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FavoriteSourcesStrip(
+    sources: List<FavoriteSourceQuickItem>,
+    onOpenSource: (String) -> Unit,
+    onSeeAll: () -> Unit
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Icon(Icons.Default.Explore, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+                Text("Favorite Sources", style = MaterialTheme.typography.titleMedium)
+            }
+            TextButton(onClick = onSeeAll) { Text("All sources") }
+        }
+        LazyRow(
+            contentPadding = PaddingValues(horizontal = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            items(sources, key = { it.id }) { src ->
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceContainer,
+                    shape = RoundedCornerShape(14.dp),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)),
+                    modifier = Modifier.clickable { onOpenSource(src.id) }
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = when {
+                                src.id == "local_saf" -> Icons.Default.FolderZip
+                                src.isDemo -> Icons.Default.Science
+                                else -> Icons.Default.Public
+                            },
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Column {
+                            Text(src.name, style = MaterialTheme.typography.labelLarge)
+                            Text(
+                                src.language.uppercase(),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
                     }
                 }

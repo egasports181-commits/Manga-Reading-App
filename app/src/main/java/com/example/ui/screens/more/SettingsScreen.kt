@@ -18,6 +18,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.domain.model.*
+import com.example.network.DnsMode
+import com.example.ui.components.LiquidGlassTopBar
 import com.example.ui.theme.AccentPreset
 import com.example.ui.theme.ThemeMode
 
@@ -26,7 +28,8 @@ import com.example.ui.theme.ThemeMode
 fun SettingsScreen(
     viewModel: MoreViewModel,
     onBack: () -> Unit,
-    onOpenBackup: () -> Unit
+    onOpenBackup: () -> Unit,
+    onOpenDiagnostics: () -> Unit = {}
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val prefs = state.prefs
@@ -48,13 +51,13 @@ fun SettingsScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
+            LiquidGlassTopBar(
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 },
-                title = { Text("Settings") }
+                title = "Settings"
             )
         }
     ) { padding ->
@@ -205,9 +208,42 @@ fun SettingsScreen(
                         valueRange = 1f..5f,
                         steps = 3
                     )
+                    Text("Automatic Download Retries: ${prefs.downloadMaxRetries}", style = MaterialTheme.typography.labelLarge)
+                    Slider(
+                        value = prefs.downloadMaxRetries.toFloat(),
+                        onValueChange = { viewModel.setDownloadMaxRetries(it.toInt()) },
+                        valueRange = 0f..5f,
+                        steps = 4
+                    )
                     SettingsSwitch("Wi-Fi Only Downloads", prefs.wifiOnlyDownloads, viewModel::setWifiOnly)
                     SettingsSwitch("Auto-Download New Chapters", prefs.autoDownloadNewChapters, viewModel::setAutoDownloadNew)
                     SettingsSwitch("Auto-Cleanup Read Chapters", prefs.autoCleanupReadChapters, viewModel::setAutoCleanupRead)
+                }
+            }
+
+            // Network & DNS
+            item { SectionHeader("Network & DNS") }
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("DNS Resolution Mode", style = MaterialTheme.typography.labelLarge)
+                    Row(
+                        modifier = Modifier.horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        DnsMode.entries.forEach { mode ->
+                            FilterChip(
+                                selected = prefs.dnsMode == mode,
+                                onClick = { viewModel.setDnsMode(mode) },
+                                label = { Text(mode.label) }
+                            )
+                        }
+                    }
+                    SettingsSwitch("Prefer IPv4 First (Fixes Broken Mobile IPv6 Routes)", prefs.preferIpv4, viewModel::setPreferIpv4)
+                    ListItem(
+                        headlineContent = { Text("Network & Repository Diagnostics") },
+                        supportingContent = { Text("Test connectivity, inspect DoH/DNS status, and view HTTP logs") },
+                        modifier = Modifier.clickable(onClick = onOpenDiagnostics)
+                    )
                 }
             }
 

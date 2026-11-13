@@ -24,6 +24,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.example.ui.components.KomaEmptyState
+import com.example.ui.components.LiquidGlassTopBar
 import java.text.DateFormat
 import java.util.*
 
@@ -43,8 +44,9 @@ fun UpdatesScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("Updates", style = MaterialTheme.typography.headlineMedium) },
+            LiquidGlassTopBar(
+                title = "Updates",
+                subtitle = if (state.updates.isNotEmpty()) "${state.updates.size} entries" else null,
                 actions = {
                     IconButton(onClick = onOpenDownloads) {
                         Icon(Icons.Default.Download, contentDescription = "Download Queue")
@@ -148,7 +150,7 @@ fun UpdatesScreen(
                 )
             } else {
                 LazyColumn(
-                    contentPadding = PaddingValues(16.dp),
+                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 104.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     items(state.updates, key = { it.id }) { item ->

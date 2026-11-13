@@ -10,21 +10,49 @@ import coil.memory.MemoryCache
 import com.example.data.local.db.KomaDatabase
 import com.example.data.preferences.AppPreferencesRepository
 import com.example.data.repository.*
+import com.example.extension.ExtensionSessionManager
+import com.example.network.KomaDns
+import com.example.network.KomaNetworkInterceptor
+import com.example.network.NetworkDiagnosticsTracker
 import com.example.source.SourceRegistry
 import com.example.util.CbzEntryFetcher
 import com.example.util.DemoPageFetcher
 import com.example.worker.LibraryUpdateWorker
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import okhttp3.Cache
+import okhttp3.ConnectionSpec
 import okhttp3.OkHttpClient
+import java.io.File
 import java.util.concurrent.TimeUnit
 
 class AppContainer(context: Context) {
     val appContext: Context = context.applicationContext
+    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     val database: KomaDatabase = KomaDatabase.build(appContext)
     val preferences: AppPreferencesRepository = AppPreferencesRepository(appContext)
 
+    val networkDiagnostics = NetworkDiagnosticsTracker(appContext)
+    val komaDns = KomaDns(networkDiagnostics)
+    val sessionManager = ExtensionSessionManager(database.extensionDao())
+    val networkInterceptor = KomaNetworkInterceptor(networkDiagnostics)
+
     val httpClient: OkHttpClient = OkHttpClient.Builder()
+        .dns(komaDns)
+        .cookieJar(sessionManager.cookieJar)
+        .addInterceptor(networkInterceptor)
+        .connectionSpecs(listOf(ConnectionSpec.MODERN_TLS, ConnectionSpec.COMPATIBLE_TLS))
+        .followRedirects(true)
+        .followSslRedirects(true)
+        .retryOnConnectionFailure(true)
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(25, TimeUnit.SECONDS)
+        .writeTimeout(25, TimeUnit.SECONDS)
+        .callTimeout(45, TimeUnit.SECONDS)
+        .cache(Cache(File(appContext.cacheDir, "http_cache"), 50L * 1024L * 1024L))
         .build()
 
     val imageLoader: ImageLoader = ImageLoader.Builder(appContext)
@@ -57,7 +85,8 @@ class AppContainer(context: Context) {
 
     val extensionRepository: ExtensionRepository = ExtensionRepository(
         extensionDao = database.extensionDao(),
-        httpClient = httpClient
+        httpClient = httpClient,
+        context = appContext
     )
 
     val mangaRepository: MangaRepository = MangaRepository(
@@ -93,6 +122,19 @@ class AppContainer(context: Context) {
         sourcePrefDao = database.sourcePreferenceDao(),
         prefsRepo = preferences
     )
+
+    init {
+        appScope.launch {
+            sessionManager.preloadCookies()
+            extensionRepository.seedDefaultRepositoriesIfMissing(forceRestore = false)
+        }
+        appScope.launch {
+            preferences.preferences.collect { prefs ->
+                komaDns.mode = prefs.dnsMode
+                komaDns.preferIpv4 = prefs.preferIpv4
+            }
+        }
+    }
 }
 
 class KomaApplication : Application(), ImageLoaderFactory, Configuration.Provider {

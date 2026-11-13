@@ -1,6 +1,10 @@
 package com.example.ui.screens.sources
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -21,7 +25,8 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -29,13 +34,18 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import coil.compose.AsyncImage
 import com.example.data.local.entity.ExtensionPackageEntity
 import com.example.data.local.entity.ExtensionRepoEntity
 import com.example.domain.model.*
 import com.example.ui.components.KomaEmptyState
+import com.example.ui.components.LiquidGlassSurface
+import com.example.ui.components.LiquidGlassTopBar
 import com.example.ui.components.MangaCardUi
 import com.example.ui.components.MangaCoverCard
+import com.example.ui.theme.StatusCompleted
 import com.example.ui.theme.StatusError
+import com.example.ui.theme.StatusHiatus
 import com.example.ui.theme.StatusOngoing
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -43,12 +53,14 @@ import com.example.ui.theme.StatusOngoing
 fun SourcesScreen(
     viewModel: SourcesViewModel,
     onOpenSource: (String) -> Unit,
-    onOpenManga: (String) -> Unit
+    onOpenManga: (String) -> Unit,
+    onOpenDiagnostics: () -> Unit = {}
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     var selectedTab by remember { mutableIntStateOf(0) }
     val tabs = listOf("Sources", "Global Search", "Extensions")
     var showAddRepoDialog by remember { mutableStateOf(false) }
+    var showImportRepoDialog by remember { mutableStateOf(false) }
     var showFilterSheet by remember { mutableStateOf(false) }
     var inspectPackage by remember { mutableStateOf<ExtensionPackageEntity?>(null) }
 
@@ -70,12 +82,16 @@ fun SourcesScreen(
     Scaffold(
         topBar = {
             Column {
-                TopAppBar(
-                    title = { Text("Browse & Extensions", style = MaterialTheme.typography.headlineMedium) },
+                LiquidGlassTopBar(
+                    title = "Browse & Extensions",
+                    subtitle = "${state.repos.count { it.isEnabled }} active repos • ${state.packages.size} indexed",
                     actions = {
+                        IconButton(onClick = onOpenDiagnostics) {
+                            Icon(Icons.Default.NetworkCheck, contentDescription = "Network & repo diagnostics")
+                        }
                         if (selectedTab == 0) {
                             IconButton(onClick = { viewModel.checkSourceAvailability() }) {
-                                Icon(Icons.Default.NetworkCheck, contentDescription = "Check source status")
+                                Icon(Icons.Default.Refresh, contentDescription = "Recheck source health")
                             }
                         } else if (selectedTab == 2) {
                             IconButton(
@@ -87,7 +103,7 @@ fun SourcesScreen(
                         }
                     }
                 )
-                TabRow(selectedTabIndex = selectedTab) {
+                PrimaryTabRow(selectedTabIndex = selectedTab) {
                     tabs.forEachIndexed { index, title ->
                         Tab(
                             selected = selectedTab == index,
@@ -146,15 +162,17 @@ fun SourcesScreen(
                 0 -> SourcesDirectoryTab(
                     state = state,
                     onLangFilter = viewModel::setLanguageFilter,
-                    onCategoryFilter = viewModel::setCategoryFilter,
+                    onToggleSourceEnabled = viewModel::setSourceEnabled,
                     onOpenSource = onOpenSource,
-                    onPickLocalSaf = { safFolderLauncher.launch(null) }
+                    onPickLocalSaf = { safFolderLauncher.launch(null) },
+                    onOpenExtensionsTab = { selectedTab = 2 }
                 )
                 1 -> GlobalSearchTab(
                     state = state,
                     onQueryChange = viewModel::updateGlobalQuery,
                     onSearch = viewModel::executeGlobalSearch,
                     onOpenFilters = { showFilterSheet = true },
+                    onToggleSearchSource = viewModel::toggleSearchSourceEnabled,
                     onToggleSaveSearch = viewModel::toggleSavedSearch,
                     onDeleteSearch = viewModel::deleteSearchHistory,
                     onSelectHistory = {
@@ -165,10 +183,20 @@ fun SourcesScreen(
                 )
                 2 -> ExtensionsManagerTab(
                     state = state,
+                    onSelectSubTab = viewModel::selectExtSubTab,
                     onSearchChange = viewModel::updateExtSearch,
+                    onLangFilterChange = viewModel::updateExtLangFilter,
+                    onRepoFilterChange = viewModel::updateExtRepoFilter,
+                    onCompatFilterChange = viewModel::updateExtCompatFilter,
                     onSortChange = viewModel::updateExtSort,
-                    onInstalledOnlyChange = viewModel::toggleExtInstalledOnly,
                     onAddRepo = { showAddRepoDialog = true },
+                    onRefreshAllRepos = { viewModel.refreshAllEnabledRepos(false) },
+                    onRetryFailedRepos = { viewModel.refreshAllEnabledRepos(true) },
+                    onRestoreBuiltIns = viewModel::restoreBuiltInRepos,
+                    onExportRepos = viewModel::exportRepositories,
+                    onImportRepos = { showImportRepoDialog = true },
+                    onOpenDiagnostics = onOpenDiagnostics,
+                    onToggleRepoEnabled = viewModel::setRepoEnabled,
                     onRefreshRepo = viewModel::refreshRepository,
                     onTrustRepo = viewModel::trustRepository,
                     onRemoveRepo = viewModel::removeRepository,
@@ -192,6 +220,28 @@ fun SourcesScreen(
         )
     }
 
+    if (showImportRepoDialog) {
+        ImportRepositoryDialog(
+            onDismiss = { showImportRepoDialog = false },
+            onImport = { raw ->
+                viewModel.importRepositories(raw)
+                showImportRepoDialog = false
+            }
+        )
+    }
+
+    state.exportedReposJson?.let { json ->
+        ExportRepositoryDialog(
+            json = json,
+            onCopy = {
+                val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                cm.setPrimaryClip(ClipData.newPlainText("Koma Repositories", json))
+                viewModel.dismissExportJson()
+            },
+            onDismiss = viewModel::dismissExportJson
+        )
+    }
+
     if (showFilterSheet) {
         SearchFilterBottomSheet(
             initial = state.globalFilters,
@@ -208,9 +258,14 @@ fun SourcesScreen(
         ExtensionInspectDialog(
             pkg = pkg,
             onDismiss = { inspectPackage = null },
-            onInstall = {
+            onInstallOrVerify = {
                 viewModel.installOrUpdateExtension(pkg)
                 inspectPackage = null
+            },
+            onOpenApkInBrowser = { url ->
+                runCatching {
+                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                }
             }
         )
     }
@@ -220,12 +275,13 @@ fun SourcesScreen(
 private fun SourcesDirectoryTab(
     state: SourcesUiState,
     onLangFilter: (String) -> Unit,
-    onCategoryFilter: (String) -> Unit,
+    onToggleSourceEnabled: (String, Boolean) -> Unit,
     onOpenSource: (String) -> Unit,
-    onPickLocalSaf: () -> Unit
+    onPickLocalSaf: () -> Unit,
+    onOpenExtensionsTab: () -> Unit
 ) {
     LazyColumn(
-        contentPadding = PaddingValues(16.dp),
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 104.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         item {
@@ -276,88 +332,144 @@ private fun SourcesDirectoryTab(
         }
 
         items(state.sources, key = { it.id }) { source ->
+            val health = source.healthStatus
             Surface(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable { onOpenSource(source.id) }
+                    .clickable(enabled = source.isEnabled) { onOpenSource(source.id) }
                     .testTag("source_item_${source.id}"),
                 color = MaterialTheme.colorScheme.surfaceContainer,
                 shape = MaterialTheme.shapes.medium,
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.35f))
             ) {
-                Row(
-                    modifier = Modifier.padding(14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Surface(
-                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.16f),
-                        shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier.size(44.dp)
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            Icon(
-                                imageVector = when {
-                                    source.id == "local_saf" -> Icons.Default.FolderZip
-                                    source.isDemo -> Icons.Default.Science
-                                    else -> Icons.Default.Public
-                                },
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary
-                            )
-                        }
-                    }
-
-                    Column(modifier = Modifier.weight(1f)) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        Surface(
+                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.16f),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.size(44.dp)
                         ) {
-                            Text(source.name, style = MaterialTheme.typography.titleMedium)
-                            if (source.isDemo) {
-                                Surface(
-                                    color = MaterialTheme.colorScheme.secondary.copy(alpha = 0.2f),
-                                    shape = RoundedCornerShape(4.dp)
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = when {
+                                        source.id == "local_saf" -> Icons.Default.FolderZip
+                                        source.isDemo -> Icons.Default.Science
+                                        else -> Icons.Default.Public
+                                    },
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text(source.name, style = MaterialTheme.typography.titleMedium)
+                                if (source.isDemo) {
+                                    Surface(
+                                        color = MaterialTheme.colorScheme.secondary.copy(alpha = 0.2f),
+                                        shape = RoundedCornerShape(4.dp)
+                                    ) {
+                                        Text(
+                                            "SAMPLE",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.secondary,
+                                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                        )
+                                    }
+                                }
+                            }
+                            Text(
+                                text = "${source.category} • ${source.language.uppercase()}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            if (source.isEnabled && health != null) {
+                                val statusColor = if (health.isOnline) StatusOngoing else StatusError
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(5.dp)
                                 ) {
+                                    Surface(modifier = Modifier.size(7.dp), shape = CircleShape, color = statusColor) {}
                                     Text(
-                                        "SAMPLE",
+                                        text = if (health.isOnline) {
+                                            "Online • ${health.latencyMs}ms"
+                                        } else {
+                                            "Offline • ${health.errorReason ?: "Unreachable"}"
+                                        },
                                         style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.secondary,
-                                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                        color = statusColor,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis
                                     )
                                 }
                             }
                         }
-                        Text(
-                            text = "${source.category} • ${source.language.uppercase()}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+
+                        Switch(
+                            checked = source.isEnabled,
+                            onCheckedChange = { onToggleSourceEnabled(source.id, it) }
                         )
                     }
+                }
+            }
+        }
 
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        val statusColor = when (source.isAvailable) {
-                            true -> StatusOngoing
-                            false -> StatusError
-                            null -> MaterialTheme.colorScheme.onSurfaceVariant
+        if (state.verifiedExtensionDescriptors.isNotEmpty()) {
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "Verified Mihon Extension Catalogs (${state.verifiedExtensionDescriptors.size})",
+                        style = MaterialTheme.typography.titleSmall
+                    )
+                    TextButton(onClick = onOpenExtensionsTab) {
+                        Text("Manage")
+                    }
+                }
+            }
+            items(state.verifiedExtensionDescriptors, key = { "desc_${it.pkg.pkgId}" }) { desc ->
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceContainer,
+                    shape = MaterialTheme.shapes.medium
+                ) {
+                    Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(desc.pkg.name, style = MaterialTheme.typography.titleSmall)
+                            Surface(
+                                color = StatusHiatus.copy(alpha = 0.16f),
+                                shape = RoundedCornerShape(6.dp)
+                            ) {
+                                Text(
+                                    text = if (desc.canExecuteInKoma) "Executable" else "APK Verified • Restricted",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = StatusHiatus,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
                         }
-                        Surface(
-                            modifier = Modifier.size(8.dp),
-                            shape = CircleShape,
-                            color = statusColor
-                        ) {}
-                        Text(
-                            text = when (source.isAvailable) {
-                                true -> "Online"
-                                false -> "Offline"
-                                null -> "Checking"
-                            },
-                            style = MaterialTheme.typography.labelSmall,
-                            color = statusColor
-                        )
+                        if (desc.sources.isNotEmpty()) {
+                            Text(
+                                text = "Catalog Sources: " + desc.sources.joinToString(", ") { "${it.name} (${it.lang})" },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
                     }
                 }
             }
@@ -371,60 +483,147 @@ private fun GlobalSearchTab(
     onQueryChange: (String) -> Unit,
     onSearch: () -> Unit,
     onOpenFilters: () -> Unit,
+    onToggleSearchSource: (String) -> Unit,
     onToggleSaveSearch: (com.example.data.local.entity.SearchHistoryEntity) -> Unit,
     onDeleteSearch: (Long) -> Unit,
     onSelectHistory: (String) -> Unit,
     onOpenMangaCard: (MangaCardUi) -> Unit
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
-        Row(
+        LiquidGlassSurface(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                .padding(horizontal = 16.dp, vertical = 10.dp),
+            shape = RoundedCornerShape(20.dp),
+            shadowElevation = 6.dp
         ) {
-            OutlinedTextField(
-                value = state.globalQuery,
-                onValueChange = onQueryChange,
-                placeholder = { Text("Search title, alt title, or author across sources") },
-                singleLine = true,
-                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-                trailingIcon = {
-                    if (state.globalQuery.isNotBlank()) {
-                        IconButton(onClick = { onQueryChange("") }) {
-                            Icon(Icons.Default.Clear, contentDescription = "Clear")
+            Row(
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                OutlinedTextField(
+                    value = state.globalQuery,
+                    onValueChange = onQueryChange,
+                    placeholder = { Text("Search title or author across sources") },
+                    singleLine = true,
+                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                    trailingIcon = {
+                        if (state.globalQuery.isNotBlank()) {
+                            IconButton(onClick = { onQueryChange("") }) {
+                                Icon(Icons.Default.Clear, contentDescription = "Clear")
+                            }
                         }
-                    }
-                },
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                keyboardActions = KeyboardActions(onSearch = { onSearch() }),
-                modifier = Modifier
-                    .weight(1f)
-                    .testTag("global_search_input")
-            )
-            FilledTonalIconButton(
-                onClick = onOpenFilters,
-                modifier = Modifier.minimumInteractiveComponentSize()
-            ) {
-                Icon(Icons.Default.FilterList, contentDescription = "Advanced search filters")
+                    },
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                    keyboardActions = KeyboardActions(onSearch = { onSearch() }),
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("global_search_input")
+                )
+                FilledTonalIconButton(
+                    onClick = onOpenFilters,
+                    modifier = Modifier.minimumInteractiveComponentSize()
+                ) {
+                    Icon(Icons.Default.FilterList, contentDescription = "Advanced search filters")
+                }
+                Button(
+                    onClick = onSearch,
+                    modifier = Modifier.minimumInteractiveComponentSize().testTag("global_search_submit")
+                ) {
+                    Text("Go")
+                }
             }
-            Button(
-                onClick = onSearch,
-                modifier = Modifier.minimumInteractiveComponentSize().testTag("global_search_submit")
+        }
+
+        // Per-source inclusion toggles
+        if (state.sources.isNotEmpty()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Text("Go")
+                state.sources.filter { it.isEnabled }.forEach { src ->
+                    val included = src.id !in state.disabledSearchSourceIds
+                    FilterChip(
+                        selected = included,
+                        onClick = { onToggleSearchSource(src.id) },
+                        label = { Text(src.name) },
+                        leadingIcon = if (included) {
+                            { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
+                        } else null
+                    )
+                }
+            }
+        }
+
+        // Live query suggestions
+        if (state.searchSuggestions.isNotEmpty() && state.globalQuery.isNotBlank()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                state.searchSuggestions.forEach { sug ->
+                    SuggestionChip(
+                        onClick = { onSelectHistory(sug) },
+                        label = { Text(sug) }
+                    )
+                }
             }
         }
 
         if (state.isSearchingGlobal) {
-            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            LinearProgressIndicator(modifier = Modifier.fillMaxWidth().padding(top = 4.dp))
         }
 
         LazyColumn(
-            contentPadding = PaddingValues(bottom = 24.dp),
+            contentPadding = PaddingValues(top = 8.dp, bottom = 104.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+            if (state.globalSourceErrors.isNotEmpty()) {
+                item {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 16.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        state.globalSourceErrors.forEach { (src, err) ->
+                            Surface(
+                                color = MaterialTheme.colorScheme.error.copy(alpha = 0.12f),
+                                shape = RoundedCornerShape(10.dp)
+                            ) {
+                                Text(
+                                    "$src: $err",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = StatusError,
+                                    modifier = Modifier.fillMaxWidth().padding(10.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (state.duplicateTitlesAcrossSources.isNotEmpty()) {
+                item {
+                    Surface(
+                        color = MaterialTheme.colorScheme.secondaryContainer,
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)
+                    ) {
+                        Text(
+                            text = "Duplicate series detected across multiple sources (${state.duplicateTitlesAcrossSources.size} title(s)) — check source badges on cards.",
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(10.dp)
+                        )
+                    }
+                }
+            }
+
             if (state.globalResults.isEmpty() && !state.isSearchingGlobal) {
                 if (state.searchHistory.isNotEmpty()) {
                     item {
@@ -464,7 +663,7 @@ private fun GlobalSearchTab(
                     item {
                         KomaEmptyState(
                             title = "Global Multi-Source Search",
-                            subtitle = "Enter a manga title and tap Go to query all active sources simultaneously with genre, status, year, and rating filters."
+                            subtitle = "Enter a manga title and tap Go to query selected active sources simultaneously with genre, status, year, and rating filters."
                         )
                     }
                 }
@@ -496,10 +695,20 @@ private fun GlobalSearchTab(
 @Composable
 private fun ExtensionsManagerTab(
     state: SourcesUiState,
+    onSelectSubTab: (ExtensionStoreTab) -> Unit,
     onSearchChange: (String) -> Unit,
+    onLangFilterChange: (String) -> Unit,
+    onRepoFilterChange: (Long?) -> Unit,
+    onCompatFilterChange: (ExtensionCompatFilter) -> Unit,
     onSortChange: (ExtensionSortOption) -> Unit,
-    onInstalledOnlyChange: (Boolean) -> Unit,
     onAddRepo: () -> Unit,
+    onRefreshAllRepos: () -> Unit,
+    onRetryFailedRepos: () -> Unit,
+    onRestoreBuiltIns: () -> Unit,
+    onExportRepos: () -> Unit,
+    onImportRepos: () -> Unit,
+    onOpenDiagnostics: () -> Unit,
+    onToggleRepoEnabled: (ExtensionRepoEntity, Boolean) -> Unit,
     onRefreshRepo: (ExtensionRepoEntity) -> Unit,
     onTrustRepo: (ExtensionRepoEntity, Boolean) -> Unit,
     onRemoveRepo: (ExtensionRepoEntity) -> Unit,
@@ -509,40 +718,31 @@ private fun ExtensionsManagerTab(
     onUninstall: (String) -> Unit,
     onInspect: (ExtensionPackageEntity) -> Unit
 ) {
-    val updatesCount = state.packages.count { it.isInstalled && it.hasUpdate }
+    val updatesCount = state.packages.count { (it.isInstalled || it.localApkPath.isNotBlank()) && it.hasUpdate }
+    val failedRepoCount = state.repos.count { it.isEnabled && !it.lastError.isNullOrBlank() }
 
     LazyColumn(
-        contentPadding = PaddingValues(16.dp),
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 104.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         item {
-            Surface(
-                color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                shape = MaterialTheme.shapes.medium,
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f))
+            Row(
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Icon(Icons.Default.Security, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                        Text("Sandboxed Extension Runtime", style = MaterialTheme.typography.titleSmall)
+                ExtensionStoreTab.entries.forEach { subTab ->
+                    val label = if (subTab == ExtensionStoreTab.UPDATES && updatesCount > 0) {
+                        "${subTab.label} ($updatesCount)"
+                    } else if (subTab == ExtensionStoreTab.REPOSITORIES) {
+                        "${subTab.label} (${state.repos.size})"
+                    } else {
+                        subTab.label
                     }
-                    Text(
-                        text = "Koma executes declarative JSON source descriptors (`koma_json_v1`) only. External Mihon/Tachiyomi APK indexes can be inspected for compatibility, but APKs and arbitrary remote JS are never silently installed or executed.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    FilterChip(
+                        selected = state.extSubTab == subTab,
+                        onClick = { onSelectSubTab(subTab) },
+                        label = { Text(label) }
                     )
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(onClick = onAddRepo) {
-                            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text("Add Repo URL")
-                        }
-                        if (updatesCount > 0) {
-                            FilledTonalButton(onClick = onUpdateAll) {
-                                Text("Update All ($updatesCount)")
-                            }
-                        }
-                    }
                 }
             }
         }
@@ -551,14 +751,50 @@ private fun ExtensionsManagerTab(
             item { LinearProgressIndicator(modifier = Modifier.fillMaxWidth()) }
         }
 
-        if (state.repos.isNotEmpty()) {
+        if (state.extSubTab == ExtensionStoreTab.REPOSITORIES) {
             item {
-                Text("Configured Repositories (${state.repos.size})", style = MaterialTheme.typography.titleSmall)
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    shape = MaterialTheme.shapes.medium,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f))
+                ) {
+                    Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("Mihon & Koma Extension Repositories", style = MaterialTheme.typography.titleSmall)
+                        Text(
+                            "Supports HTTPS Mihon `index.pb` (Protobuf), `index.min.json`, companion `repo.json`, and Koma declarative JSON adapters. Built-in defaults stay seeded and independently syncable.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Row(
+                            modifier = Modifier.horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Button(onClick = onRefreshAllRepos) {
+                                Icon(Icons.Default.Sync, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Text("Refresh All")
+                            }
+                            if (failedRepoCount > 0) {
+                                FilledTonalButton(onClick = onRetryFailedRepos) {
+                                    Text("Retry Failed ($failedRepoCount)")
+                                }
+                            }
+                            OutlinedButton(onClick = onAddRepo) { Text("Add URL") }
+                            OutlinedButton(onClick = onRestoreBuiltIns) { Text("Restore Defaults") }
+                            OutlinedButton(onClick = onExportRepos) { Text("Export JSON") }
+                            OutlinedButton(onClick = onImportRepos) { Text("Import JSON") }
+                            OutlinedButton(onClick = onOpenDiagnostics) { Text("Diagnostics") }
+                        }
+                    }
+                }
             }
+
             items(state.repos, key = { "repo_${it.id}" }) { repo ->
+                val hasErr = !repo.lastError.isNullOrBlank()
                 Surface(
                     color = MaterialTheme.colorScheme.surfaceContainer,
-                    shape = MaterialTheme.shapes.medium
+                    shape = MaterialTheme.shapes.medium,
+                    border = if (hasErr) BorderStroke(1.dp, StatusError.copy(alpha = 0.35f)) else null
                 ) {
                     Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Row(
@@ -567,7 +803,41 @@ private fun ExtensionsManagerTab(
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
-                                Text(repo.name, style = MaterialTheme.typography.titleSmall)
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Text(
+                                        repo.displayName.ifBlank { repo.name },
+                                        style = MaterialTheme.typography.titleSmall,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Surface(
+                                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
+                                        shape = RoundedCornerShape(4.dp)
+                                    ) {
+                                        Text(
+                                            repo.repoFormat,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                        )
+                                    }
+                                    if (repo.isBuiltIn) {
+                                        Surface(
+                                            color = MaterialTheme.colorScheme.secondary.copy(alpha = 0.14f),
+                                            shape = RoundedCornerShape(4.dp)
+                                        ) {
+                                            Text(
+                                                "DEFAULT",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.secondary,
+                                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                            )
+                                        }
+                                    }
+                                }
                                 Text(
                                     repo.indexUrl,
                                     style = MaterialTheme.typography.bodySmall,
@@ -576,7 +846,30 @@ private fun ExtensionsManagerTab(
                                     overflow = TextOverflow.Ellipsis
                                 )
                             }
-                            Row {
+                            Switch(
+                                checked = repo.isEnabled,
+                                onCheckedChange = { onToggleRepoEnabled(repo, it) }
+                            )
+                        }
+
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "${repo.extensionCount} extensions • FP: ${repo.signingKeyFingerprint.ifBlank { "Pending" }.take(16)}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                FilterChip(
+                                    selected = repo.isTrusted,
+                                    onClick = { onTrustRepo(repo, !repo.isTrusted) },
+                                    label = { Text(if (repo.isTrusted) "Trusted" else "Untrusted") }
+                                )
                                 IconButton(onClick = { onRefreshRepo(repo) }) {
                                     Icon(Icons.Default.Refresh, contentDescription = "Refresh repo")
                                 }
@@ -585,156 +878,317 @@ private fun ExtensionsManagerTab(
                                 }
                             }
                         }
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text(
-                                text = "SHA-256: ${repo.signingKeyFingerprint.ifBlank { "Pending" }}",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            FilterChip(
-                                selected = repo.isTrusted,
-                                onClick = { onTrustRepo(repo, !repo.isTrusted) },
-                                label = { Text(if (repo.isTrusted) "Trusted" else "Untrusted (Tap to Trust)") },
-                                leadingIcon = {
-                                    Icon(
-                                        if (repo.isTrusted) Icons.Default.VerifiedUser else Icons.Default.GppMaybe,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                }
-                            )
-                        }
+
                         repo.lastError?.let { err ->
-                            Text(err, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                            Text(err, style = MaterialTheme.typography.bodySmall, color = StatusError)
                         }
                     }
                 }
             }
-        }
 
-        item {
-            OutlinedTextField(
-                value = state.extSearchQuery,
-                onValueChange = onSearchChange,
-                placeholder = { Text("Filter extensions by name, package ID, or author") },
-                singleLine = true,
-                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-                modifier = Modifier.fillMaxWidth()
-            )
-        }
-
-        item {
-            Row(
-                modifier = Modifier.horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                FilterChip(
-                    selected = state.extShowInstalledOnly,
-                    onClick = { onInstalledOnlyChange(!state.extShowInstalledOnly) },
-                    label = { Text("Installed Only") }
-                )
-                ExtensionSortOption.entries.forEach { sort ->
-                    FilterChip(
-                        selected = state.extSort == sort,
-                        onClick = { onSortChange(sort) },
-                        label = { Text(sort.label) }
+            if (state.installHistory.isNotEmpty()) {
+                item {
+                    Text(
+                        "Recent APK / Adapter Audit Log",
+                        style = MaterialTheme.typography.titleSmall,
+                        modifier = Modifier.padding(top = 6.dp)
                     )
                 }
-            }
-        }
-
-        if (state.packages.isEmpty()) {
-            item {
-                KomaEmptyState(
-                    title = "No Extension Packages Indexed",
-                    subtitle = "Add an HTTPS repository index URL above to inspect compatible Koma JSON source descriptors or external extension metadata.",
-                    showIllustration = false
-                )
+                items(state.installHistory.take(15), key = { "hist_${it.id}" }) { entry ->
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceContainer,
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text("${entry.extensionName} (${entry.action})", style = MaterialTheme.typography.labelMedium)
+                                Text(
+                                    entry.status,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (entry.status == "SUCCESS" || entry.status == "VERIFIED") StatusOngoing else StatusHiatus
+                                )
+                            }
+                            Text(
+                                entry.detail,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                }
             }
         } else {
-            items(state.packages, key = { it.pkgId }) { pkg ->
-                val isCompatible = pkg.format == ExtensionFormat.KOMA_JSON_ADAPTER.id
-                Surface(
-                    color = MaterialTheme.colorScheme.surfaceContainer,
-                    shape = MaterialTheme.shapes.medium,
-                    modifier = Modifier.fillMaxWidth().clickable { onInspect(pkg) }
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(pkg.name, style = MaterialTheme.typography.titleSmall)
-                                Text(
-                                    "${pkg.language.uppercase()} • v${pkg.latestVersionName} • ${pkg.author}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            Surface(
-                                color = if (isCompatible) {
-                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
-                                } else {
-                                    MaterialTheme.colorScheme.error.copy(alpha = 0.16f)
-                                },
-                                shape = RoundedCornerShape(6.dp)
-                            ) {
-                                Text(
-                                    text = if (isCompatible) "Koma JSON" else "APK Incompatible",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = if (isCompatible) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                                )
-                            }
+                    OutlinedTextField(
+                        value = state.extSearchQuery,
+                        onValueChange = onSearchChange,
+                        placeholder = { Text("Search extensions, pkg ID, or source") },
+                        singleLine = true,
+                        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                        modifier = Modifier.weight(1f)
+                    )
+                    FilledTonalButton(onClick = onRefreshAllRepos) {
+                        Icon(Icons.Default.Sync, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Sync")
+                    }
+                    if (updatesCount > 0) {
+                        Button(onClick = onUpdateAll) {
+                            Text("Update ($updatesCount)")
                         }
+                    }
+                }
+            }
 
-                        Text(
-                            pkg.description,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis
+            item {
+                Row(
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    ExtensionCompatFilter.entries.forEach { cf ->
+                        FilterChip(
+                            selected = state.extCompatFilter == cf,
+                            onClick = { onCompatFilterChange(cf) },
+                            label = { Text(cf.label) }
                         )
+                    }
+                }
+            }
 
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            if (pkg.isInstalled) {
-                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    Switch(
-                                        checked = pkg.isEnabled,
-                                        onCheckedChange = { onToggleEnabled(pkg.pkgId, it) }
-                                    )
-                                    Text(if (pkg.isEnabled) "Enabled" else "Disabled", style = MaterialTheme.typography.labelMedium)
-                                }
-                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                    if (pkg.hasUpdate) {
-                                        Button(onClick = { onInstallOrUpdate(pkg) }) { Text("Update") }
-                                    }
-                                    OutlinedButton(onClick = { onUninstall(pkg.pkgId) }) { Text("Uninstall") }
-                                }
-                            } else {
-                                Text(
-                                    pkg.permissionsSummary,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.weight(1f)
-                                )
-                                Spacer(Modifier.width(8.dp))
-                                Button(
-                                    onClick = { onInstallOrUpdate(pkg) },
-                                    enabled = isCompatible
+            if (state.allPackageLanguages.isNotEmpty()) {
+                item {
+                    Row(
+                        modifier = Modifier.horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        FilterChip(
+                            selected = state.extLangFilter == "all",
+                            onClick = { onLangFilterChange("all") },
+                            label = { Text("All Langs") }
+                        )
+                        state.allPackageLanguages.take(12).forEach { lang ->
+                            FilterChip(
+                                selected = state.extLangFilter.equals(lang, true),
+                                onClick = { onLangFilterChange(lang) },
+                                label = { Text(lang.uppercase()) }
+                            )
+                        }
+                    }
+                }
+            }
+
+            if (state.repos.size > 1) {
+                item {
+                    Row(
+                        modifier = Modifier.horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        FilterChip(
+                            selected = state.extRepoFilterId == null,
+                            onClick = { onRepoFilterChange(null) },
+                            label = { Text("All Repos") }
+                        )
+                        state.repos.filter { it.isEnabled }.forEach { repo ->
+                            FilterChip(
+                                selected = state.extRepoFilterId == repo.id,
+                                onClick = { onRepoFilterChange(repo.id) },
+                                label = { Text(repo.displayName.ifBlank { repo.name }) }
+                            )
+                        }
+                    }
+                }
+            }
+
+            item {
+                Row(
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    ExtensionSortOption.entries.forEach { sort ->
+                        FilterChip(
+                            selected = state.extSort == sort,
+                            onClick = { onSortChange(sort) },
+                            label = { Text("Sort: ${sort.label}") }
+                        )
+                    }
+                }
+            }
+
+            if (state.packages.isEmpty()) {
+                item {
+                    KomaEmptyState(
+                        title = "No Extension Packages Shown",
+                        subtitle = "Tap Sync above to fetch extension catalogs from your 8 configured Mihon repositories, or adjust filters.",
+                        actionLabel = "Sync Repositories",
+                        onAction = onRefreshAllRepos,
+                        showIllustration = false
+                    )
+                }
+            } else {
+                items(state.packages, key = { it.pkgId }) { pkg ->
+                    val isKoma = pkg.format == ExtensionFormat.KOMA_JSON_ADAPTER.id
+                    val isApkVerified = pkg.localApkPath.isNotBlank()
+                    val downloadFraction = state.extDownloadProgress[pkg.pkgId]
+                    val compatStatus = runCatching {
+                        ExtensionCompatibilityStatus.valueOf(pkg.compatibilityStatus)
+                    }.getOrDefault(ExtensionCompatibilityStatus.UNKNOWN)
+
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceContainer,
+                        shape = MaterialTheme.shapes.medium,
+                        modifier = Modifier.fillMaxWidth().clickable { onInspect(pkg) }
+                    ) {
+                        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Surface(
+                                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                    shape = RoundedCornerShape(10.dp),
+                                    modifier = Modifier.size(40.dp)
                                 ) {
-                                    Text(if (isCompatible) "Install" else "Blocked")
+                                    if (pkg.iconUrl.isNotBlank()) {
+                                        AsyncImage(
+                                            model = pkg.iconUrl,
+                                            contentDescription = pkg.name,
+                                            contentScale = ContentScale.Crop,
+                                            modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(10.dp))
+                                        )
+                                    } else {
+                                        Box(contentAlignment = Alignment.Center) {
+                                            Icon(
+                                                imageVector = if (isKoma) Icons.Default.Extension else Icons.Default.Android,
+                                                contentDescription = null,
+                                                tint = MaterialTheme.colorScheme.primary
+                                            )
+                                        }
+                                    }
+                                }
+
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        pkg.name,
+                                        style = MaterialTheme.typography.titleSmall,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        "${pkg.language.uppercase()} • v${pkg.latestVersionName}${if (pkg.isNsfw) " • 18+" else ""} • ${pkg.author}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+
+                                val badgeColor = when (compatStatus) {
+                                    ExtensionCompatibilityStatus.EXECUTABLE_KOMA_JSON -> StatusOngoing
+                                    ExtensionCompatibilityStatus.VERIFIED_MIHON_RUNTIME_RESTRICTED,
+                                    ExtensionCompatibilityStatus.COMPATIBLE_MIHON_METADATA -> StatusCompleted
+                                    ExtensionCompatibilityStatus.SIGNATURE_MISMATCH,
+                                    ExtensionCompatibilityStatus.LIB_VERSION_INCOMPATIBLE,
+                                    ExtensionCompatibilityStatus.UNTRUSTED_REPO -> StatusError
+                                    ExtensionCompatibilityStatus.UNKNOWN -> StatusHiatus
+                                }
+                                Surface(
+                                    color = badgeColor.copy(alpha = 0.14f),
+                                    shape = RoundedCornerShape(6.dp)
+                                ) {
+                                    Text(
+                                        text = when {
+                                            isKoma -> "Koma Sandbox"
+                                            isApkVerified -> "APK Verified"
+                                            else -> "Mihon APK"
+                                        },
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = badgeColor,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                    )
+                                }
+                            }
+
+                            Text(
+                                pkg.description,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
+                            )
+
+                            pkg.installError?.let { err ->
+                                Text(err, style = MaterialTheme.typography.bodySmall, color = StatusError)
+                            }
+
+                            if (downloadFraction != null) {
+                                LinearProgressIndicator(
+                                    progress = { downloadFraction },
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                if (pkg.isInstalled) {
+                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        Switch(
+                                            checked = pkg.isEnabled,
+                                            onCheckedChange = { onToggleEnabled(pkg.pkgId, it) }
+                                        )
+                                        Text(if (pkg.isEnabled) "Active" else "Disabled", style = MaterialTheme.typography.labelMedium)
+                                    }
+                                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        if (pkg.hasUpdate) {
+                                            Button(onClick = { onInstallOrUpdate(pkg) }) { Text("Update") }
+                                        }
+                                        OutlinedButton(onClick = { onUninstall(pkg.pkgId) }) { Text("Uninstall") }
+                                    }
+                                } else {
+                                    Text(
+                                        text = if (isApkVerified) {
+                                            "Verified ${pkg.libVersion} • Runtime Restricted"
+                                        } else {
+                                            pkg.permissionsSummary
+                                        },
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        if (isApkVerified) {
+                                            OutlinedButton(onClick = { onUninstall(pkg.pkgId) }) {
+                                                Text("Remove")
+                                            }
+                                        } else if (isKoma) {
+                                            Button(onClick = { onInstallOrUpdate(pkg) }) {
+                                                Text("Install")
+                                            }
+                                        } else {
+                                            FilledTonalButton(
+                                                onClick = { onInstallOrUpdate(pkg) },
+                                                enabled = pkg.apkUrl.startsWith("https://") && downloadFraction == null
+                                            ) {
+                                                Text("Verify APK")
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -760,7 +1214,7 @@ private fun AddRepositoryDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
-                    "Enter an HTTPS repository JSON index URL (Koma JSON index or Mihon index.min.json for metadata inspection).",
+                    "Enter an HTTPS repository index URL (`index.pb`, `index.min.json`, `index.json`, or `koma_json_v1`). Duplicate URLs are prevented automatically.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -802,34 +1256,106 @@ private fun AddRepositoryDialog(
 }
 
 @Composable
+private fun ImportRepositoryDialog(
+    onDismiss: () -> Unit,
+    onImport: (String) -> Unit
+) {
+    var raw by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Import Repository JSON") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Paste a previously exported Koma repository JSON bundle.", style = MaterialTheme.typography.bodySmall)
+                OutlinedTextField(
+                    value = raw,
+                    onValueChange = { raw = it },
+                    minLines = 5,
+                    maxLines = 9,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            Button(onClick = { onImport(raw) }, enabled = raw.isNotBlank()) { Text("Import") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        }
+    )
+}
+
+@Composable
+private fun ExportRepositoryDialog(
+    json: String,
+    onCopy: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Exported Repositories JSON") },
+        text = {
+            OutlinedTextField(
+                value = json,
+                onValueChange = {},
+                readOnly = true,
+                minLines = 6,
+                maxLines = 10,
+                modifier = Modifier.fillMaxWidth()
+            )
+        },
+        confirmButton = {
+            Button(onClick = onCopy) { Text("Copy & Close") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Close") }
+        }
+    )
+}
+
+@Composable
 private fun ExtensionInspectDialog(
     pkg: ExtensionPackageEntity,
     onDismiss: () -> Unit,
-    onInstall: () -> Unit
+    onInstallOrVerify: () -> Unit,
+    onOpenApkInBrowser: (String) -> Unit
 ) {
-    val isCompatible = pkg.format == ExtensionFormat.KOMA_JSON_ADAPTER.id
+    val isKoma = pkg.format == ExtensionFormat.KOMA_JSON_ADAPTER.id
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(pkg.name) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text("Package ID: ${pkg.pkgId}", style = MaterialTheme.typography.bodySmall)
                 Text("Format: ${ExtensionFormat.fromId(pkg.format).label}", style = MaterialTheme.typography.bodySmall)
                 Text("Version: ${pkg.latestVersionName} (code ${pkg.latestVersionCode})", style = MaterialTheme.typography.bodySmall)
-                Text("Signature Hash: ${pkg.signatureHash.ifBlank { "None" }}", style = MaterialTheme.typography.bodySmall)
-                Text("Permissions: ${pkg.permissionsSummary}", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
-                if (!isCompatible) {
-                    Text(
-                        "Security Notice: Native APK plugins cannot be executed or installed silently by Koma. Only sandboxed Koma JSON adapters are runnable.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error
-                    )
+                if (pkg.libVersion.isNotBlank()) {
+                    Text("Target Lib Version: ${pkg.libVersion}", style = MaterialTheme.typography.bodySmall)
+                }
+                Text("Status: ${pkg.compatibilityStatus}", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                if (pkg.compatibilityReason.isNotBlank()) {
+                    Text(pkg.compatibilityReason, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                if (pkg.installedSignatureSha256.isNotBlank()) {
+                    Text("APK Cert SHA-256: ${pkg.installedSignatureSha256.take(24)}…", style = MaterialTheme.typography.labelSmall)
+                }
+                if (pkg.apkUrl.startsWith("https://")) {
+                    TextButton(
+                        onClick = { onOpenApkInBrowser(pkg.apkUrl) },
+                        contentPadding = PaddingValues(0.dp)
+                    ) {
+                        Icon(Icons.Default.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Open APK Download URL in Browser")
+                    }
                 }
             }
         },
         confirmButton = {
-            if (isCompatible && !pkg.isInstalled) {
-                Button(onClick = onInstall) { Text("Install") }
+            if (isKoma && !pkg.isInstalled) {
+                Button(onClick = onInstallOrVerify) { Text("Install") }
+            } else if (!isKoma && pkg.apkUrl.startsWith("https://")) {
+                FilledTonalButton(onClick = onInstallOrVerify) { Text("Download & Verify SHA-256") }
             }
         },
         dismissButton = {

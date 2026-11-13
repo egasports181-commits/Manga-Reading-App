@@ -1,15 +1,16 @@
 package com.example.ui.navigation
 
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -24,6 +25,8 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.toRoute
 import com.example.AppContainer
+import com.example.ui.components.GlassNavTab
+import com.example.ui.components.LiquidGlassFloatingNavBar
 import com.example.ui.screens.detail.MangaDetailScreen
 import com.example.ui.screens.detail.MangaDetailViewModel
 import com.example.ui.screens.home.HomeScreen
@@ -33,6 +36,7 @@ import com.example.ui.screens.library.LibraryViewModel
 import com.example.ui.screens.more.*
 import com.example.ui.screens.reader.ReaderScreen
 import com.example.ui.screens.reader.ReaderViewModel
+import com.example.ui.screens.sources.NetworkDiagnosticsScreen
 import com.example.ui.screens.sources.SourceBrowseScreen
 import com.example.ui.screens.sources.SourcesScreen
 import com.example.ui.screens.sources.SourcesViewModel
@@ -53,8 +57,10 @@ import kotlinx.serialization.Serializable
 @Serializable data object TrackingRoute
 @Serializable data object BackupRoute
 @Serializable data object SettingsRoute
+@Serializable data object DiagnosticsRoute
 
 private data class TopTabItem(
+    val id: String,
     val route: Any,
     val label: String,
     val selectedIcon: ImageVector,
@@ -63,11 +69,11 @@ private data class TopTabItem(
 )
 
 private val topTabs = listOf(
-    TopTabItem(HomeRoute, "Home", Icons.Filled.Home, Icons.Outlined.Home, "nav_home"),
-    TopTabItem(SourcesRoute, "Sources", Icons.Filled.Explore, Icons.Outlined.Explore, "nav_sources"),
-    TopTabItem(LibraryRoute, "Library", Icons.Filled.CollectionsBookmark, Icons.Outlined.CollectionsBookmark, "nav_library"),
-    TopTabItem(UpdatesRoute, "Updates", Icons.Filled.NewReleases, Icons.Outlined.NewReleases, "nav_updates"),
-    TopTabItem(MoreRoute, "More", Icons.Filled.MoreHoriz, Icons.Outlined.MoreHoriz, "nav_more")
+    TopTabItem("home", HomeRoute, "Home", Icons.Filled.Home, Icons.Outlined.Home, "nav_home"),
+    TopTabItem("sources", SourcesRoute, "Sources", Icons.Filled.Explore, Icons.Outlined.Explore, "nav_sources"),
+    TopTabItem("library", LibraryRoute, "Library", Icons.Filled.CollectionsBookmark, Icons.Outlined.CollectionsBookmark, "nav_library"),
+    TopTabItem("updates", UpdatesRoute, "Updates", Icons.Filled.NewReleases, Icons.Outlined.NewReleases, "nav_updates"),
+    TopTabItem("more", MoreRoute, "More", Icons.Filled.MoreHoriz, Icons.Outlined.MoreHoriz, "nav_more")
 )
 
 @Composable
@@ -76,13 +82,15 @@ fun KomaAppNavigation(container: AppContainer) {
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentDest = backStackEntry?.destination
 
-    val showChrome = currentDest?.let { dest ->
-        dest.hasRoute<HomeRoute>() ||
-            dest.hasRoute<SourcesRoute>() ||
-            dest.hasRoute<LibraryRoute>() ||
-            dest.hasRoute<UpdatesRoute>() ||
-            dest.hasRoute<MoreRoute>()
-    } ?: true
+    val selectedTabId = when {
+        currentDest?.hasRoute<HomeRoute>() == true -> "home"
+        currentDest?.hasRoute<SourcesRoute>() == true -> "sources"
+        currentDest?.hasRoute<LibraryRoute>() == true -> "library"
+        currentDest?.hasRoute<UpdatesRoute>() == true -> "updates"
+        currentDest?.hasRoute<MoreRoute>() == true -> "more"
+        else -> null
+    }
+    val showChrome = selectedTabId != null || currentDest == null
 
     val homeVm: HomeViewModel = viewModel(
         factory = HomeViewModel.factory(container.mangaRepository, container.sourceRegistry, container.preferences)
@@ -128,52 +136,12 @@ fun KomaAppNavigation(container: AppContainer) {
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val useRail = maxWidth >= 600.dp
 
-        Scaffold(
-            bottomBar = {
-                if (showChrome && !useRail) {
-                    NavigationBar {
-                        topTabs.forEach { tab ->
-                            val selected = when (tab.route) {
-                                is HomeRoute -> currentDest?.hasRoute<HomeRoute>() == true
-                                is SourcesRoute -> currentDest?.hasRoute<SourcesRoute>() == true
-                                is LibraryRoute -> currentDest?.hasRoute<LibraryRoute>() == true
-                                is UpdatesRoute -> currentDest?.hasRoute<UpdatesRoute>() == true
-                                is MoreRoute -> currentDest?.hasRoute<MoreRoute>() == true
-                                else -> false
-                            }
-                            NavigationBarItem(
-                                selected = selected,
-                                onClick = { navigateTab(tab.route) },
-                                icon = {
-                                    Icon(
-                                        if (selected) tab.selectedIcon else tab.unselectedIcon,
-                                        contentDescription = tab.label
-                                    )
-                                },
-                                label = { Text(tab.label, maxLines = 1) },
-                                modifier = Modifier.testTag(tab.tag)
-                            )
-                        }
-                    }
-                }
-            }
-        ) { innerPadding ->
-            Row(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(bottom = if (showChrome && !useRail) innerPadding.calculateBottomPadding() else 0.dp)
-            ) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            Row(modifier = Modifier.fillMaxSize()) {
                 if (showChrome && useRail) {
                     NavigationRail {
                         topTabs.forEach { tab ->
-                            val selected = when (tab.route) {
-                                is HomeRoute -> currentDest?.hasRoute<HomeRoute>() == true
-                                is SourcesRoute -> currentDest?.hasRoute<SourcesRoute>() == true
-                                is LibraryRoute -> currentDest?.hasRoute<LibraryRoute>() == true
-                                is UpdatesRoute -> currentDest?.hasRoute<UpdatesRoute>() == true
-                                is MoreRoute -> currentDest?.hasRoute<MoreRoute>() == true
-                                else -> false
-                            }
+                            val selected = (selectedTabId ?: "home") == tab.id
                             NavigationRailItem(
                                 selected = selected,
                                 onClick = { navigateTab(tab.route) },
@@ -200,6 +168,7 @@ fun KomaAppNavigation(container: AppContainer) {
                             viewModel = homeVm,
                             onOpenManga = { id -> navController.navigate(MangaDetailRoute(id)) },
                             onNavigateToSources = { navigateTab(SourcesRoute) },
+                            onOpenSource = { srcId -> navController.navigate(SourceBrowseRoute(srcId)) },
                             onNavigateToLibrary = { navigateTab(LibraryRoute) },
                             onNavigateToDownloads = { navController.navigate(DownloadsRoute) }
                         )
@@ -208,7 +177,8 @@ fun KomaAppNavigation(container: AppContainer) {
                         SourcesScreen(
                             viewModel = sourcesVm,
                             onOpenSource = { srcId -> navController.navigate(SourceBrowseRoute(srcId)) },
-                            onOpenManga = { mangaId -> navController.navigate(MangaDetailRoute(mangaId)) }
+                            onOpenManga = { mangaId -> navController.navigate(MangaDetailRoute(mangaId)) },
+                            onOpenDiagnostics = { navController.navigate(DiagnosticsRoute) }
                         )
                     }
                     composable<LibraryRoute> {
@@ -303,10 +273,37 @@ fun KomaAppNavigation(container: AppContainer) {
                         SettingsScreen(
                             viewModel = moreVm,
                             onBack = { navController.popBackStack() },
-                            onOpenBackup = { navController.navigate(BackupRoute) }
+                            onOpenBackup = { navController.navigate(BackupRoute) },
+                            onOpenDiagnostics = { navController.navigate(DiagnosticsRoute) }
+                        )
+                    }
+                    composable<DiagnosticsRoute> {
+                        NetworkDiagnosticsScreen(
+                            container = container,
+                            sourcesViewModel = sourcesVm,
+                            onBack = { navController.popBackStack() }
                         )
                     }
                 }
+            }
+
+            if (showChrome && !useRail) {
+                LiquidGlassFloatingNavBar(
+                    tabs = topTabs.map {
+                        GlassNavTab(
+                            id = it.id,
+                            label = it.label,
+                            selectedIcon = it.selectedIcon,
+                            unselectedIcon = it.unselectedIcon,
+                            testTag = it.tag
+                        )
+                    },
+                    selectedId = selectedTabId ?: "home",
+                    onSelect = { tab ->
+                        topTabs.firstOrNull { it.id == tab.id }?.let { navigateTab(it.route) }
+                    },
+                    modifier = Modifier.align(Alignment.BottomCenter)
+                )
             }
         }
     }

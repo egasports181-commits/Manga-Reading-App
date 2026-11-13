@@ -1,21 +1,28 @@
 package com.example.ui.screens.library
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -23,7 +30,34 @@ import com.example.data.local.entity.CategoryEntity
 import com.example.domain.model.LibrarySort
 import com.example.domain.model.MangaStatus
 import com.example.ui.components.KomaEmptyState
+import com.example.ui.components.LiquidGlassTopBar
 import com.example.ui.components.MangaCoverCard
+
+private val CATEGORY_COLOR_PRESETS = listOf(
+    0xFFE11D48L,
+    0xFF2563EBL,
+    0xFF059669L,
+    0xFFD97706L,
+    0xFF7C3AEDL,
+    0xFF0891B2L
+)
+
+private val CATEGORY_ICON_PRESETS = listOf(
+    "folder" to Icons.Default.Folder,
+    "star" to Icons.Default.Star,
+    "bookmark" to Icons.Default.Bookmark,
+    "favorite" to Icons.Default.Favorite,
+    "bolt" to Icons.Default.Bolt,
+    "menu_book" to Icons.Default.MenuBook
+)
+
+private fun parseCategoryColor(argb: Long, fallback: Color): Color {
+    return if (argb != 0L) Color(argb) else fallback
+}
+
+private fun resolveCategoryIcon(iconName: String): ImageVector {
+    return CATEGORY_ICON_PRESETS.firstOrNull { it.first == iconName }?.second ?: Icons.Default.Folder
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -71,27 +105,33 @@ fun LibraryScreen(
                         containerColor = MaterialTheme.colorScheme.primaryContainer
                     )
                 )
-            } else {
+            } else if (showSearch) {
                 TopAppBar(
                     title = {
-                        if (showSearch) {
-                            OutlinedTextField(
-                                value = state.filter.searchQuery,
-                                onValueChange = viewModel::updateSearchQuery,
-                                placeholder = { Text("Filter library...") },
-                                singleLine = true,
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                        } else {
-                            Text("Library", style = MaterialTheme.typography.headlineMedium)
-                        }
+                        OutlinedTextField(
+                            value = state.filter.searchQuery,
+                            onValueChange = viewModel::updateSearchQuery,
+                            placeholder = { Text("Filter library...") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
                     },
                     actions = {
                         IconButton(onClick = {
-                            showSearch = !showSearch
-                            if (!showSearch) viewModel.updateSearchQuery("")
+                            showSearch = false
+                            viewModel.updateSearchQuery("")
                         }) {
-                            Icon(if (showSearch) Icons.Default.Close else Icons.Default.Search, contentDescription = "Filter library")
+                            Icon(Icons.Default.Close, contentDescription = "Close search")
+                        }
+                    }
+                )
+            } else {
+                LiquidGlassTopBar(
+                    title = "Library",
+                    subtitle = "${state.mangaList.size} series",
+                    actions = {
+                        IconButton(onClick = { showSearch = true }) {
+                            Icon(Icons.Default.Search, contentDescription = "Filter library")
                         }
                         IconButton(
                             onClick = { showFilterSortSheet = true },
@@ -140,7 +180,7 @@ fun LibraryScreen(
                 }
             }
 
-            // Category Tabs
+            // Category Tabs with Color & Icon badges
             ScrollableTabRow(
                 selectedTabIndex = if (state.selectedCategoryId == null) 0 else {
                     (state.categories.indexOfFirst { it.id == state.selectedCategoryId } + 1).coerceAtLeast(0)
@@ -153,12 +193,63 @@ fun LibraryScreen(
                     text = { Text("All") }
                 )
                 state.categories.forEach { cat ->
+                    val tint = parseCategoryColor(cat.colorHex, MaterialTheme.colorScheme.primary)
                     Tab(
                         selected = state.selectedCategoryId == cat.id,
                         onClick = { viewModel.selectCategory(cat.id) },
-                        text = { Text(cat.name) }
+                        text = {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Icon(
+                                    imageVector = resolveCategoryIcon(cat.iconName),
+                                    contentDescription = null,
+                                    tint = tint,
+                                    modifier = Modifier.size(15.dp)
+                                )
+                                Text(cat.name)
+                            }
+                        }
                     )
                 }
+            }
+
+            // Smart Views + Group By Source Row
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                listOf(
+                    "all" to "All",
+                    "unread" to "Unread",
+                    "recent_read" to "Recently Read",
+                    "recent_updated" to "Recently Updated",
+                    "downloaded" to "Downloaded",
+                    "completed" to "Completed"
+                ).forEach { (key, label) ->
+                    FilterChip(
+                        selected = state.smartView == key,
+                        onClick = { viewModel.setSmartView(key) },
+                        label = { Text(label) }
+                    )
+                }
+                FilterChip(
+                    selected = state.groupBySource,
+                    onClick = { viewModel.setGroupBySource(!state.groupBySource) },
+                    leadingIcon = {
+                        Icon(
+                            Icons.Default.Layers,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    },
+                    label = { Text("Group by Source") }
+                )
             }
 
             if (state.mangaList.isEmpty()) {
@@ -169,58 +260,99 @@ fun LibraryScreen(
                     onAction = onNavigateToSources
                 )
             } else if (state.isGridLayout) {
+                val grouped = remember(state.mangaList, state.groupBySource) {
+                    if (state.groupBySource) state.mangaList.groupBy { it.sourceName.ifBlank { "Unknown Source" } }
+                    else emptyMap()
+                }
                 LazyVerticalGrid(
                     columns = GridCells.Adaptive(minSize = 140.dp),
-                    contentPadding = PaddingValues(16.dp),
+                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 104.dp),
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                     verticalArrangement = Arrangement.spacedBy(16.dp),
                     modifier = Modifier.fillMaxSize()
                 ) {
-                    items(state.mangaList, key = { it.id }) { card ->
-                        MangaCoverCard(
-                            item = card,
-                            isSelected = card.id in state.selectedMangaIds,
-                            onClick = {
-                                if (inSelectionMode) viewModel.toggleSelection(card.id)
-                                else onOpenManga(card.id)
-                            },
-                            onLongClick = { viewModel.toggleSelection(card.id) },
-                            modifier = Modifier.fillMaxWidth()
-                        )
+                    if (state.groupBySource) {
+                        grouped.forEach { (sourceName, cards) ->
+                            item(key = "hdr_$sourceName", span = { GridItemSpan(maxLineSpan) }) {
+                                Text(
+                                    text = "$sourceName (${cards.size})",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.padding(top = 6.dp)
+                                )
+                            }
+                            items(cards, key = { it.id }) { card ->
+                                MangaCoverCard(
+                                    item = card,
+                                    isSelected = card.id in state.selectedMangaIds,
+                                    onClick = {
+                                        if (inSelectionMode) viewModel.toggleSelection(card.id)
+                                        else onOpenManga(card.id)
+                                    },
+                                    onLongClick = { viewModel.toggleSelection(card.id) },
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
+                        }
+                    } else {
+                        items(state.mangaList, key = { it.id }) { card ->
+                            MangaCoverCard(
+                                item = card,
+                                isSelected = card.id in state.selectedMangaIds,
+                                onClick = {
+                                    if (inSelectionMode) viewModel.toggleSelection(card.id)
+                                    else onOpenManga(card.id)
+                                },
+                                onLongClick = { viewModel.toggleSelection(card.id) },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
                     }
                 }
             } else {
+                val grouped = remember(state.mangaList, state.groupBySource) {
+                    if (state.groupBySource) state.mangaList.groupBy { it.sourceName.ifBlank { "Unknown Source" } }
+                    else emptyMap()
+                }
                 LazyColumn(
-                    contentPadding = PaddingValues(16.dp),
+                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 104.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier.fillMaxSize()
                 ) {
-                    items(state.mangaList, key = { it.id }) { card ->
-                        val selected = card.id in state.selectedMangaIds
-                        Surface(
-                            color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainer,
-                            shape = MaterialTheme.shapes.medium,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable {
+                    if (state.groupBySource) {
+                        grouped.forEach { (sourceName, cards) ->
+                            item(key = "list_hdr_$sourceName") {
+                                Text(
+                                    text = "$sourceName (${cards.size})",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.padding(top = 8.dp, bottom = 2.dp)
+                                )
+                            }
+                            items(cards, key = { it.id }) { card ->
+                                val selected = card.id in state.selectedMangaIds
+                                LibraryListRow(
+                                    card = card,
+                                    selected = selected,
+                                    onClick = {
+                                        if (inSelectionMode) viewModel.toggleSelection(card.id)
+                                        else onOpenManga(card.id)
+                                    },
+                                    onToggleSelect = { viewModel.toggleSelection(card.id) }
+                                )
+                            }
+                        }
+                    } else {
+                        items(state.mangaList, key = { it.id }) { card ->
+                            val selected = card.id in state.selectedMangaIds
+                            LibraryListRow(
+                                card = card,
+                                selected = selected,
+                                onClick = {
                                     if (inSelectionMode) viewModel.toggleSelection(card.id)
                                     else onOpenManga(card.id)
-                                }
-                        ) {
-                            ListItem(
-                                headlineContent = { Text(card.title) },
-                                supportingContent = { Text("${card.sourceName} • ${card.latestChapter}") },
-                                trailingContent = {
-                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                        if (card.unreadCount > 0) {
-                                            Badge { Text("${card.unreadCount}") }
-                                        }
-                                        Checkbox(
-                                            checked = selected,
-                                            onCheckedChange = { viewModel.toggleSelection(card.id) }
-                                        )
-                                    }
-                                }
+                                },
+                                onToggleSelect = { viewModel.toggleSelection(card.id) }
                             )
                         }
                     }
@@ -243,7 +375,7 @@ fun LibraryScreen(
             categories = state.categories,
             onDismiss = { showCategoryManager = false },
             onCreate = viewModel::createCategory,
-            onRename = viewModel::renameCategory,
+            onUpdateAppearance = viewModel::updateCategoryAppearance,
             onMove = viewModel::moveCategory,
             onDelete = viewModel::deleteCategory
         )
@@ -282,6 +414,38 @@ fun LibraryScreen(
             },
             dismissButton = {
                 TextButton(onClick = { showBulkCategoryDialog = false }) { Text("Cancel") }
+            }
+        )
+    }
+}
+
+@Composable
+private fun LibraryListRow(
+    card: com.example.ui.components.MangaCardUi,
+    selected: Boolean,
+    onClick: () -> Unit,
+    onToggleSelect: () -> Unit
+) {
+    Surface(
+        color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainer,
+        shape = MaterialTheme.shapes.medium,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+    ) {
+        ListItem(
+            headlineContent = { Text(card.title) },
+            supportingContent = { Text("${card.sourceName} • ${card.latestChapter}") },
+            trailingContent = {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    if (card.unreadCount > 0) {
+                        Badge { Text("${card.unreadCount}") }
+                    }
+                    Checkbox(
+                        checked = selected,
+                        onCheckedChange = { onToggleSelect() }
+                    )
+                }
             }
         )
     }
@@ -415,14 +579,18 @@ private fun LibraryFilterSortSheet(
 private fun CategoryManagerDialog(
     categories: List<CategoryEntity>,
     onDismiss: () -> Unit,
-    onCreate: (String) -> Unit,
-    onRename: (CategoryEntity, String) -> Unit,
+    onCreate: (String, Long, String) -> Unit,
+    onUpdateAppearance: (CategoryEntity, String, Long, String) -> Unit,
     onMove: (Int, Int) -> Unit,
     onDelete: (Long) -> Unit
 ) {
     var newName by remember { mutableStateOf("") }
+    var newColor by remember { mutableStateOf(CATEGORY_COLOR_PRESETS.first()) }
+    var newIcon by remember { mutableStateOf("folder") }
     var editingCat by remember { mutableStateOf<CategoryEntity?>(null) }
     var renameText by remember { mutableStateOf("") }
+    var editColor by remember { mutableStateOf(CATEGORY_COLOR_PRESETS.first()) }
+    var editIcon by remember { mutableStateOf("folder") }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -442,22 +610,71 @@ private fun CategoryManagerDialog(
                     )
                     Button(
                         onClick = {
-                            onCreate(newName)
+                            onCreate(newName, newColor, newIcon)
                             newName = ""
                         },
                         enabled = newName.isNotBlank()
                     ) { Text("Add") }
                 }
 
+                // Color & Icon pickers for new category
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    CATEGORY_COLOR_PRESETS.forEach { hex ->
+                        val c = parseCategoryColor(hex, MaterialTheme.colorScheme.primary)
+                        Box(
+                            modifier = Modifier
+                                .size(22.dp)
+                                .clip(CircleShape)
+                                .background(c)
+                                .border(
+                                    width = if (newColor == hex) 2.5.dp else 0.dp,
+                                    color = if (newColor == hex) MaterialTheme.colorScheme.onSurface else Color.Transparent,
+                                    shape = CircleShape
+                                )
+                                .clickable { newColor = hex }
+                        )
+                    }
+                }
+
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    CATEGORY_ICON_PRESETS.forEach { (key, icon) ->
+                        IconButton(
+                            onClick = { newIcon = key },
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(
+                                icon,
+                                contentDescription = key,
+                                tint = if (newIcon == key) parseCategoryColor(newColor, MaterialTheme.colorScheme.primary)
+                                else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+                }
+
                 LazyColumn(
-                    modifier = Modifier.heightIn(max = 280.dp),
+                    modifier = Modifier.heightIn(max = 260.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     itemsIndexed(categories, key = { _, c -> c.id }) { idx, cat ->
+                        val catTint = parseCategoryColor(cat.colorHex, MaterialTheme.colorScheme.primary)
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier.fillMaxWidth()
                         ) {
+                            Icon(
+                                imageVector = resolveCategoryIcon(cat.iconName),
+                                contentDescription = null,
+                                tint = catTint,
+                                modifier = Modifier.size(18.dp).padding(end = 6.dp)
+                            )
                             Text(cat.name, modifier = Modifier.weight(1f))
                             IconButton(
                                 onClick = { onMove(idx, idx - 1) },
@@ -474,8 +691,10 @@ private fun CategoryManagerDialog(
                             IconButton(onClick = {
                                 editingCat = cat
                                 renameText = cat.name
+                                editColor = cat.colorHex
+                                editIcon = cat.iconName
                             }) {
-                                Icon(Icons.Default.Edit, contentDescription = "Rename")
+                                Icon(Icons.Default.Edit, contentDescription = "Edit")
                             }
                             if (!cat.isDefault) {
                                 IconButton(onClick = { onDelete(cat.id) }) {
@@ -495,17 +714,52 @@ private fun CategoryManagerDialog(
     editingCat?.let { cat ->
         AlertDialog(
             onDismissRequest = { editingCat = null },
-            title = { Text("Rename Category") },
+            title = { Text("Edit Category") },
             text = {
-                OutlinedTextField(
-                    value = renameText,
-                    onValueChange = { renameText = it },
-                    singleLine = true
-                )
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedTextField(
+                        value = renameText,
+                        onValueChange = { renameText = it },
+                        singleLine = true,
+                        label = { Text("Name") }
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        CATEGORY_COLOR_PRESETS.forEach { hex ->
+                            val c = parseCategoryColor(hex, MaterialTheme.colorScheme.primary)
+                            Box(
+                                modifier = Modifier
+                                    .size(24.dp)
+                                    .clip(CircleShape)
+                                    .background(c)
+                                    .border(
+                                        width = if (editColor == hex) 2.5.dp else 0.dp,
+                                        color = if (editColor == hex) MaterialTheme.colorScheme.onSurface else Color.Transparent,
+                                        shape = CircleShape
+                                    )
+                                    .clickable { editColor = hex }
+                            )
+                        }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        CATEGORY_ICON_PRESETS.forEach { (key, icon) ->
+                            IconButton(
+                                onClick = { editIcon = key },
+                                modifier = Modifier.size(34.dp)
+                            ) {
+                                Icon(
+                                    icon,
+                                    contentDescription = key,
+                                    tint = if (editIcon == key) parseCategoryColor(editColor, MaterialTheme.colorScheme.primary)
+                                    else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
             },
             confirmButton = {
                 Button(onClick = {
-                    onRename(cat, renameText)
+                    onUpdateAppearance(cat, renameText, editColor, editIcon)
                     editingCat = null
                 }) { Text("Save") }
             },

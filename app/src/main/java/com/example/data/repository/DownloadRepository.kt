@@ -55,6 +55,12 @@ class DownloadRepository(
         scheduleWorker(chapterId)
     }
 
+    suspend fun moveToTop(chapterId: String) {
+        val queue = downloadDao.observeDownloadQueue().first()
+        val maxPriority = queue.maxOfOrNull { it.priority } ?: 0
+        downloadDao.updatePriority(chapterId, maxPriority + 1)
+    }
+
     suspend fun cancelDownload(chapterId: String) {
         workManager.cancelUniqueWork(workName(chapterId))
         downloadDao.deleteTask(chapterId)

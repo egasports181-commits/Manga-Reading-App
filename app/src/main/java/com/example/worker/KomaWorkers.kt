@@ -15,11 +15,14 @@ import coil.request.ImageRequest
 import coil.request.SuccessResult
 import com.example.KomaApplication
 import com.example.R
+import com.example.network.NetworkErrorFormatter
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import okhttp3.Request
 import java.io.File
 import java.io.FileOutputStream
+import java.io.IOException
 
 class ChapterDownloadWorker(
     private val appContext: Context,
@@ -33,6 +36,7 @@ class ChapterDownloadWorker(
         val downloadDao = container.database.downloadDao()
         val chapterDao = container.database.chapterDao()
         val mangaDao = container.database.mangaDao()
+        val prefs = container.preferences.preferences.first()
 
         val task = downloadDao.getTask(chapterId) ?: return@withContext Result.failure()
         val chapter = chapterDao.getChapterById(chapterId) ?: return@withContext Result.failure()
@@ -70,39 +74,57 @@ class ChapterDownloadWorker(
                 }
 
                 val outFile = File(targetDir, "page_${"%04d".format(idx)}.jpg")
-                if (!outFile.exists()) {
-                    if (page.imageUrl.startsWith("http")) {
-                        val req = Request.Builder().url(page.imageUrl).get().build()
-                        container.httpClient.newCall(req).execute().use { resp ->
-                            if (!resp.isSuccessful) throw IllegalStateException("HTTP ${resp.code}")
-                            resp.body?.byteStream()?.use { input ->
-                                FileOutputStream(outFile).use { output ->
-                                    input.copyTo(output)
+                if (!outFile.exists() || outFile.length() == 0L) {
+                    val tmpFile = File(targetDir, "page_${"%04d".format(idx)}.jpg.tmp")
+                    if (tmpFile.exists()) tmpFile.delete()
+                    try {
+                        if (page.imageUrl.startsWith("http")) {
+                            val req = Request.Builder().url(page.imageUrl).get().build()
+                            container.httpClient.newCall(req).execute().use { resp ->
+                                if (!resp.isSuccessful) throw IOException("HTTP ${resp.code}")
+                                resp.body?.byteStream()?.use { input ->
+                                    FileOutputStream(tmpFile).use { output ->
+                                        input.copyTo(output)
+                                    }
+                                } ?: throw IOException("Empty image body")
+                            }
+                        } else {
+                            // Local / Demo URI rendered through Coil ImageLoader
+                            val request = ImageRequest.Builder(appContext)
+                                .data(Uri.parse(page.imageUrl))
+                                .allowHardware(false)
+                                .build()
+                            val result = container.imageLoader.execute(request)
+                            if (result is SuccessResult) {
+                                val bmp = (result.drawable as? BitmapDrawable)?.bitmap
+                                    ?: Bitmap.createBitmap(
+                                        result.drawable.intrinsicWidth.coerceAtLeast(1),
+                                        result.drawable.intrinsicHeight.coerceAtLeast(1),
+                                        Bitmap.Config.ARGB_8888
+                                    ).also { b ->
+                                        val c = Canvas(b)
+                                        result.drawable.setBounds(0, 0, c.width, c.height)
+                                        result.drawable.draw(c)
+                                    }
+                                FileOutputStream(tmpFile).use { out ->
+                                    bmp.compress(Bitmap.CompressFormat.JPEG, 90, out)
                                 }
+                            } else {
+                                throw IOException("Unable to decode local page image")
                             }
                         }
-                    } else {
-                        // Local / Demo URI rendered through Coil ImageLoader
-                        val request = ImageRequest.Builder(appContext)
-                            .data(Uri.parse(page.imageUrl))
-                            .allowHardware(false)
-                            .build()
-                        val result = container.imageLoader.execute(request)
-                        if (result is SuccessResult) {
-                            val bmp = (result.drawable as? BitmapDrawable)?.bitmap
-                                ?: Bitmap.createBitmap(
-                                    result.drawable.intrinsicWidth.coerceAtLeast(1),
-                                    result.drawable.intrinsicHeight.coerceAtLeast(1),
-                                    Bitmap.Config.ARGB_8888
-                                ).also { b ->
-                                    val c = Canvas(b)
-                                    result.drawable.setBounds(0, 0, c.width, c.height)
-                                    result.drawable.draw(c)
-                                }
-                            FileOutputStream(outFile).use { out ->
-                                bmp.compress(Bitmap.CompressFormat.JPEG, 90, out)
+                        if (tmpFile.exists() && tmpFile.length() > 0L) {
+                            if (outFile.exists()) outFile.delete()
+                            if (!tmpFile.renameTo(outFile)) {
+                                tmpFile.copyTo(outFile, overwrite = true)
+                                tmpFile.delete()
                             }
+                        } else {
+                            throw IOException("Downloaded page was empty")
                         }
+                    } catch (e: Exception) {
+                        tmpFile.delete()
+                        throw e
                     }
                 }
                 totalBytes += outFile.length()
@@ -137,16 +159,30 @@ class ChapterDownloadWorker(
             )
             Result.success()
         } catch (e: Exception) {
-            downloadDao.updateProgress(
-                chapterId = chapterId,
-                status = "FAILED",
-                progress = 0f,
-                downloadedPages = 0,
-                totalPages = 0,
-                error = e.message ?: "Download failed",
-                bytes = 0L
-            )
-            Result.failure()
+            val friendly = NetworkErrorFormatter.describe(e)
+            val maxRetries = prefs.downloadMaxRetries.coerceIn(0, 5)
+            val canRetry = runAttemptCount < maxRetries && e is IOException
+            if (canRetry) {
+                downloadDao.upsertTask(
+                    task.copy(
+                        status = "QUEUED",
+                        retryCount = runAttemptCount + 1,
+                        errorMessage = "Retrying (${runAttemptCount + 1}/$maxRetries): $friendly"
+                    )
+                )
+                Result.retry()
+            } else {
+                downloadDao.updateProgress(
+                    chapterId = chapterId,
+                    status = "FAILED",
+                    progress = 0f,
+                    downloadedPages = 0,
+                    totalPages = 0,
+                    error = friendly,
+                    bytes = 0L
+                )
+                Result.failure()
+            }
         }
     }
 

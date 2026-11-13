@@ -1,18 +1,18 @@
 package com.example.ui.screens.reader
 
 import android.content.Context
-import coil.ImageLoader
-import coil.request.ImageRequest
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import coil.ImageLoader
+import coil.request.ImageRequest
 import com.example.data.local.entity.ChapterEntity
 import com.example.data.local.entity.MangaEntity
 import com.example.data.preferences.AppPreferencesRepository
-import com.example.data.preferences.UserPreferences
 import com.example.data.repository.DownloadRepository
 import com.example.data.repository.MangaRepository
 import com.example.domain.model.*
+import com.example.network.NetworkErrorFormatter
 import com.example.source.SourceRegistry
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -23,6 +23,7 @@ data class ReaderUiState(
     val allChapters: List<ChapterEntity> = emptyList(),
     val pages: List<SourcePage> = emptyList(),
     val currentPage: Int = 0,
+    val bookmarkedPages: Set<Int> = emptySet(),
     val isLoading: Boolean = true,
     val error: String? = null,
     val isOfflineChapter: Boolean = false,
@@ -33,6 +34,10 @@ data class ReaderUiState(
     val customZoom: Float = 1.0f,
     val background: ReaderBackground = ReaderBackground.BLACK,
     val tapZonesEnabled: Boolean = true,
+    val tapZoneLayout: TapZoneLayout = TapZoneLayout.SIDES,
+    val pageMarginsDp: Int = 0,
+    val autoHideMs: Int = 0,
+    val transitionMode: ReaderTransitionMode = ReaderTransitionMode.SLIDE,
     val volumeNavEnabled: Boolean = false,
     val keepScreenAwake: Boolean = true,
     val hideSystemBars: Boolean = true,
@@ -75,8 +80,8 @@ class ReaderViewModel(
         val sortedAsc = chaptersAscOrDesc.sortedBy { it.chapterNumber }
         val idx = sortedAsc.indexOfFirst { it.id == activeChId }
         val activeChapter = if (idx >= 0) sortedAsc[idx] else sortedAsc.firstOrNull()
-
         val effective = resolveEffectiveMode(prefs.defaultReadingMode, manga)
+        val bookmarks = activeChapter?.let { mangaRepo.parseBookmarkedPages(it.bookmarkedPagesJson) } ?: emptySet()
 
         ReaderUiState(
             manga = manga,
@@ -84,6 +89,7 @@ class ReaderViewModel(
             allChapters = chaptersAscOrDesc,
             pages = cache.pages,
             currentPage = cache.currentPage,
+            bookmarkedPages = bookmarks,
             isLoading = cache.isLoading,
             error = cache.error,
             isOfflineChapter = cache.isOffline,
@@ -93,6 +99,10 @@ class ReaderViewModel(
             customZoom = prefs.customZoomScale,
             background = prefs.readerBackground,
             tapZonesEnabled = prefs.tapZonesEnabled,
+            tapZoneLayout = prefs.readerTapZoneLayout,
+            pageMarginsDp = prefs.readerPageMarginsDp,
+            autoHideMs = prefs.readerAutoHideMs,
+            transitionMode = prefs.readerTransitionMode,
             volumeNavEnabled = prefs.volumeKeyNavigation,
             keepScreenAwake = prefs.keepScreenAwake,
             hideSystemBars = prefs.hideSystemBars,
@@ -129,7 +139,6 @@ class ReaderViewModel(
                 val manga = mangaRepo.observeManga(mangaId).first()
                     ?: throw IllegalStateException("Manga not found")
 
-                // Check offline downloaded pages first
                 val offlinePages = downloadRepo.getOfflinePages(chapter)
                 val pages = if (offlinePages != null) {
                     offlinePages
@@ -151,7 +160,7 @@ class ReaderViewModel(
             } catch (e: Exception) {
                 loadState.value = LoadCache(
                     isLoading = false,
-                    error = e.message ?: "Failed to load chapter pages"
+                    error = NetworkErrorFormatter.describe(e)
                 )
             }
         }
@@ -165,6 +174,14 @@ class ReaderViewModel(
         loadState.update { it.copy(currentPage = clamped) }
         prefetchAround(clamped, pages)
         persistProgress(clamped, pages.size)
+    }
+
+    fun toggleCurrentPageBookmark() {
+        val chId = currentChapterId.value
+        val pageIdx = loadState.value.currentPage
+        viewModelScope.launch {
+            mangaRepo.togglePageBookmark(chId, pageIdx)
+        }
     }
 
     fun persistCurrentSession() {
@@ -191,9 +208,10 @@ class ReaderViewModel(
     }
 
     private fun prefetchAround(index: Int, pages: List<SourcePage>) {
-        val start = (index + 1).coerceAtMost(pages.size)
-        val end = (index + 4).coerceAtMost(pages.size)
-        for (i in start until end) {
+        val start = (index - 1).coerceAtLeast(0)
+        val end = (index + 4).coerceAtMost(pages.lastIndex)
+        for (i in start..end) {
+            if (i == index) continue
             val req = ImageRequest.Builder(appContext)
                 .data(pages[i].imageUrl)
                 .build()
@@ -225,6 +243,10 @@ class ReaderViewModel(
     fun setCustomZoom(zoom: Float) = viewModelScope.launch { prefsRepo.setCustomZoom(zoom) }
     fun setBackground(bg: ReaderBackground) = viewModelScope.launch { prefsRepo.setReaderBackground(bg) }
     fun setTapZones(enabled: Boolean) = viewModelScope.launch { prefsRepo.setTapZones(enabled) }
+    fun setTapZoneLayout(layout: TapZoneLayout) = viewModelScope.launch { prefsRepo.setReaderTapZoneLayout(layout) }
+    fun setPageMarginsDp(dp: Int) = viewModelScope.launch { prefsRepo.setReaderPageMarginsDp(dp) }
+    fun setAutoHideMs(ms: Int) = viewModelScope.launch { prefsRepo.setReaderAutoHideMs(ms) }
+    fun setTransitionMode(mode: ReaderTransitionMode) = viewModelScope.launch { prefsRepo.setReaderTransitionMode(mode) }
     fun setVolumeNav(enabled: Boolean) = viewModelScope.launch { prefsRepo.setVolumeNavigation(enabled) }
     fun setKeepAwake(enabled: Boolean) = viewModelScope.launch { prefsRepo.setKeepScreenAwake(enabled) }
     fun setHideSystemBars(enabled: Boolean) = viewModelScope.launch { prefsRepo.setHideSystemBars(enabled) }

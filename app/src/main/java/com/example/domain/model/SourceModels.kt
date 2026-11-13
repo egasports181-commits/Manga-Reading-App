@@ -1,5 +1,7 @@
 package com.example.domain.model
 
+import kotlinx.serialization.Serializable
+
 data class SearchFilters(
     val genres: Set<String> = emptySet(),
     val status: MangaStatus? = null,
@@ -19,6 +21,21 @@ enum class SourceSortOption(val id: String, val label: String) {
         fun fromId(id: String): SourceSortOption = entries.firstOrNull { it.id == id } ?: POPULARITY
     }
 }
+
+data class SourceHealthStatus(
+    val isOnline: Boolean,
+    val latencyMs: Long = 0L,
+    val httpStatus: Int? = null,
+    val errorReason: String? = null
+)
+
+@Serializable
+data class ExtensionSourceMeta(
+    val id: Long,
+    val name: String,
+    val lang: String,
+    val baseUrl: String = ""
+)
 
 data class SourceMangaItem(
     val sourceId: String,

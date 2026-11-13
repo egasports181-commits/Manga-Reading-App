@@ -265,7 +265,8 @@ fun HorizontalMangaSection(
     onItemClick: (MangaCardUi) -> Unit,
     modifier: Modifier = Modifier,
     onActionClick: (() -> Unit)? = null,
-    actionLabel: String = "See all"
+    actionLabel: String = "See all",
+    cardWidth: Dp = 144.dp
 ) {
     if (items.isEmpty()) return
     Column(modifier = modifier.fillMaxWidth()) {
@@ -312,7 +313,8 @@ fun HorizontalMangaSection(
             items(items, key = { it.id }) { card ->
                 MangaCoverCard(
                     item = card,
-                    onClick = { onItemClick(card) }
+                    onClick = { onItemClick(card) },
+                    width = cardWidth
                 )
             }
         }

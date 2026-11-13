@@ -13,6 +13,23 @@ interface MangaSourceAdapter {
     val isDemoSource: Boolean get() = false
 
     suspend fun isAvailable(): Boolean
+    suspend fun checkStatus(): SourceHealthStatus {
+        val start = System.currentTimeMillis()
+        return try {
+            val ok = isAvailable()
+            SourceHealthStatus(
+                isOnline = ok,
+                latencyMs = (System.currentTimeMillis() - start).coerceAtLeast(1L),
+                errorReason = if (ok) null else "Source unavailable"
+            )
+        } catch (e: Exception) {
+            SourceHealthStatus(
+                isOnline = false,
+                latencyMs = System.currentTimeMillis() - start,
+                errorReason = e.message ?: "Network error"
+            )
+        }
+    }
     suspend fun getPopular(page: Int, filters: SearchFilters = SearchFilters()): SourcePagedResult
     suspend fun getLatest(page: Int, filters: SearchFilters = SearchFilters()): SourcePagedResult
     suspend fun search(query: String, page: Int, filters: SearchFilters = SearchFilters()): SourcePagedResult

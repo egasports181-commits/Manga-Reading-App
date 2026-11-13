@@ -3,6 +3,7 @@ package com.example.source
 import com.example.data.local.dao.SourcePreferenceDao
 import com.example.data.local.entity.SourcePreferenceEntity
 import com.example.domain.model.*
+import com.example.network.NetworkErrorFormatter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -29,12 +30,31 @@ class MangaDexSourceAdapter(
 
     private val tagIdCache = mutableMapOf<String, String>()
 
-    override suspend fun isAvailable(): Boolean = withContext(Dispatchers.IO) {
+    override suspend fun isAvailable(): Boolean = checkStatus().isOnline
+
+    override suspend fun checkStatus(): SourceHealthStatus = withContext(Dispatchers.IO) {
+        val start = System.currentTimeMillis()
         try {
             val req = Request.Builder().url("$baseUrl/ping").get().build()
-            httpClient.newCall(req).execute().use { it.isSuccessful }
-        } catch (_: Exception) {
-            false
+            httpClient.newCall(req).execute().use { resp ->
+                val elapsed = (System.currentTimeMillis() - start).coerceAtLeast(1L)
+                if (resp.isSuccessful) {
+                    SourceHealthStatus(isOnline = true, latencyMs = elapsed, httpStatus = resp.code)
+                } else {
+                    SourceHealthStatus(
+                        isOnline = false,
+                        latencyMs = elapsed,
+                        httpStatus = resp.code,
+                        errorReason = "HTTP ${resp.code} from MangaDex API"
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            SourceHealthStatus(
+                isOnline = false,
+                latencyMs = (System.currentTimeMillis() - start).coerceAtLeast(1L),
+                errorReason = NetworkErrorFormatter.describe(e)
+            )
         }
     }
 
@@ -419,7 +439,7 @@ class MangaDexSourceAdapter(
         val token = getPrefMap()["session_token"]
         val builder = Request.Builder()
             .url(url)
-            .header("User-Agent", "KomaAndroidReader/1.0")
+            .header("Accept", "application/json")
             .get()
         if (!token.isNullOrBlank()) {
             builder.header("Authorization", "Bearer $token")

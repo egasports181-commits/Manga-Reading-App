@@ -43,7 +43,9 @@ data class CategoryEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0L,
     val name: String,
     val sortOrder: Int = 0,
-    val isDefault: Boolean = false
+    val isDefault: Boolean = false,
+    val colorHex: Long = 0xFFE11D48L,
+    val iconName: String = "folder"
 )
 
 @Entity(
@@ -98,7 +100,8 @@ data class ChapterEntity(
     val isDownloaded: Boolean = false,
     val localDirPath: String = "",
     val downloadedAt: Long = 0L,
-    val sizeBytes: Long = 0L
+    val sizeBytes: Long = 0L,
+    val bookmarkedPagesJson: String = "[]"
 )
 
 @Entity(
@@ -125,7 +128,16 @@ data class ExtensionRepoEntity(
     val signingKeyFingerprint: String = "",
     val isTrusted: Boolean = false,
     val lastRefreshedAt: Long = 0L,
-    val lastError: String? = null
+    val lastError: String? = null,
+    val displayName: String = "",
+    val website: String = "",
+    val iconUrl: String = "",
+    val isEnabled: Boolean = true,
+    val isBuiltIn: Boolean = false,
+    val repoFormat: String = "auto",
+    val lastSuccessAt: Long = 0L,
+    val lastHttpStatus: Int = 0,
+    val extensionCount: Int = 0
 )
 
 @Entity(
@@ -152,7 +164,19 @@ data class ExtensionPackageEntity(
     val latestVersionName: String = "",
     val signatureHash: String = "",
     val popularity: Int = 0,
-    val permissionsSummary: String = "Network access to declared API host only"
+    val permissionsSummary: String = "Network access to declared API host only",
+    val apkName: String = "",
+    val apkUrl: String = "",
+    val localApkPath: String = "",
+    val isNsfw: Boolean = false,
+    val hasReadme: Boolean = false,
+    val libVersion: String = "",
+    val sourcesJson: String = "[]",
+    val compatibilityStatus: String = "UNKNOWN",
+    val compatibilityReason: String = "",
+    val installError: String? = null,
+    val installedSignatureSha256: String = "",
+    val updatedAt: Long = 0L
 )
 
 @Entity(
@@ -172,7 +196,9 @@ data class DownloadTaskEntity(
     val downloadedPages: Int = 0,
     val errorMessage: String? = null,
     val createdAt: Long = System.currentTimeMillis(),
-    val bytesDownloaded: Long = 0L
+    val bytesDownloaded: Long = 0L,
+    val priority: Int = 0,
+    val retryCount: Int = 0
 )
 
 @Entity(
@@ -227,4 +253,35 @@ data class SourcePreferenceEntity(
     val sourceId: String,
     val prefKey: String,
     val prefValue: String
+)
+
+@Entity(
+    tableName = "extension_install_history",
+    indices = [Index("pkgId"), Index("timestamp")]
+)
+data class ExtensionInstallHistoryEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0L,
+    val pkgId: String,
+    val extensionName: String,
+    val action: String,
+    val versionName: String,
+    val status: String,
+    val detail: String,
+    val timestamp: Long = System.currentTimeMillis()
+)
+
+@Entity(
+    tableName = "extension_cookies",
+    indices = [Index("host")]
+)
+data class ExtensionCookieEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0L,
+    val host: String,
+    val name: String,
+    val value: String,
+    val domain: String,
+    val path: String = "/",
+    val expiresAt: Long = 0L,
+    val secure: Boolean = true,
+    val httpOnly: Boolean = false
 )

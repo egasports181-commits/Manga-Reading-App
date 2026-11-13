@@ -8,17 +8,27 @@ import com.example.data.preferences.AppPreferencesRepository
 import com.example.data.preferences.UserPreferences
 import com.example.data.repository.MangaRepository
 import com.example.domain.model.*
+import com.example.network.NetworkErrorFormatter
 import com.example.source.SourceRegistry
 import com.example.ui.components.MangaCardUi
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
+data class FavoriteSourceQuickItem(
+    val id: String,
+    val name: String,
+    val language: String,
+    val isDemo: Boolean
+)
+
 data class HomeUiState(
     val isLoadingLiveFeeds: Boolean = false,
     val feedError: String? = null,
     val demoModeEnabled: Boolean = false,
+    val compactCards: Boolean = false,
     val sectionOrder: List<HomeSectionType> = HomeSectionType.defaultOrder(),
     val hiddenSections: Set<String> = emptySet(),
+    val favoriteSources: List<FavoriteSourceQuickItem> = emptyList(),
     val continueReading: List<MangaCardUi> = emptyList(),
     val recentlyUpdated: List<MangaCardUi> = emptyList(),
     val recentlyAdded: List<MangaCardUi> = emptyList(),
@@ -49,40 +59,40 @@ class HomeViewModel(
         val personalized: List<MangaCardUi> = emptyList()
     )
 
-    val uiState: StateFlow<HomeUiState> = combine(
-        prefsRepo.preferences,
+    private val dbSectionFlows = combine(
         mangaRepo.continueReading,
         mangaRepo.recentlyUpdated,
         mangaRepo.recentlyAdded,
         mangaRepo.downloadedChapters,
-        mangaRepo.history,
-        mangaRepo.libraryManga,
-        liveFeedState
-    ) { values ->
-        val prefs = values[0] as UserPreferences
-        @Suppress("UNCHECKED_CAST")
-        val continueList = values[1] as List<MangaEntity>
-        @Suppress("UNCHECKED_CAST")
-        val updatedList = values[2] as List<MangaEntity>
-        @Suppress("UNCHECKED_CAST")
-        val addedList = values[3] as List<MangaEntity>
-        @Suppress("UNCHECKED_CAST")
-        val downloadedChapters = values[4] as List<com.example.data.local.entity.ChapterEntity>
-        @Suppress("UNCHECKED_CAST")
-        val historyList = values[5] as List<com.example.data.local.entity.ReadingHistoryEntity>
-        @Suppress("UNCHECKED_CAST")
-        val libraryList = values[6] as List<MangaEntity>
-        val live = values[7] as LiveFeedCache
+        mangaRepo.history
+    ) { cont, upd, add, dl, hist ->
+        HomeDbSnapshot(cont, upd, add, dl, hist)
+    }
 
+    private data class HomeDbSnapshot(
+        val continueList: List<MangaEntity>,
+        val updatedList: List<MangaEntity>,
+        val addedList: List<MangaEntity>,
+        val downloadedChapters: List<com.example.data.local.entity.ChapterEntity>,
+        val historyList: List<com.example.data.local.entity.ReadingHistoryEntity>
+    )
+
+    val uiState: StateFlow<HomeUiState> = combine(
+        prefsRepo.preferences,
+        dbSectionFlows,
+        mangaRepo.libraryManga,
+        sourceRegistry.activeSources,
+        liveFeedState
+    ) { prefs, db, libraryList, activeAdapters, live ->
         val libById = libraryList.associateBy { it.id }
-        val downloadedMangaCards = downloadedChapters
+        val downloadedMangaCards = db.downloadedChapters
             .distinctBy { it.mangaId }
             .take(12)
             .mapNotNull { ch ->
                 libById[ch.mangaId]?.toCardUi()?.copy(latestChapter = ch.name)
             }
 
-        val historyCards = historyList
+        val historyCards = db.historyList
             .distinctBy { it.mangaId }
             .take(15)
             .map { h ->
@@ -104,15 +114,26 @@ class HomeViewModel(
             HomeSectionType.entries.firstOrNull { it.id == id }
         }.ifEmpty { HomeSectionType.defaultOrder() }
 
+        val favSources = activeAdapters.map {
+            FavoriteSourceQuickItem(
+                id = it.id,
+                name = it.name,
+                language = it.language,
+                isDemo = it.isDemoSource
+            )
+        }
+
         HomeUiState(
             isLoadingLiveFeeds = live.isLoading,
             feedError = live.error,
             demoModeEnabled = prefs.demoModeEnabled,
+            compactCards = prefs.homeCompactCards,
             sectionOrder = orderedTypes,
             hiddenSections = prefs.hiddenHomeSections,
-            continueReading = continueList.map { it.toCardUi() },
-            recentlyUpdated = updatedList.map { it.toCardUi() },
-            recentlyAdded = addedList.map { it.toCardUi() },
+            favoriteSources = favSources,
+            continueReading = db.continueList.map { it.toCardUi() },
+            recentlyUpdated = db.updatedList.map { it.toCardUi() },
+            recentlyAdded = db.addedList.map { it.toCardUi() },
             popularManga = live.popular,
             trendingManga = live.trending,
             latestChapters = live.latest,
@@ -149,7 +170,6 @@ class HomeViewModel(
                 val popularCards = popularRes.items.map { it.toCardUi() }
                 val latestCards = latestRes.items.map { it.toCardUi() }
 
-                // Personalized picks based on user's top library genres
                 val lib = mangaRepo.libraryManga.first()
                 val topGenre = lib.flatMap { it.genres.split(",") }
                     .map { it.trim() }
@@ -182,7 +202,7 @@ class HomeViewModel(
                 liveFeedState.update {
                     it.copy(
                         isLoading = false,
-                        error = e.message ?: "Could not reach source catalog. Check connection or enable Demo Mode."
+                        error = "${NetworkErrorFormatter.describe(e)} Check connection or enable Demo Mode."
                     )
                 }
             }
@@ -196,6 +216,12 @@ class HomeViewModel(
                 mangaRepo.removeDemoData()
             }
             refreshLiveFeeds()
+        }
+    }
+
+    fun toggleCompactCards(compact: Boolean) {
+        viewModelScope.launch {
+            prefsRepo.setHomeCompactCards(compact)
         }
     }
 

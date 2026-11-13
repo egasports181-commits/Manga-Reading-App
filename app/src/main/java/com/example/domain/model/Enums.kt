@@ -47,13 +47,34 @@ enum class ImageScaleMode(val id: String, val label: String) {
 }
 
 enum class ReaderBackground(val id: String, val label: String, val colorHex: Long) {
-    BLACK("black", "Pure Black", 0xFF000000),
-    OBSIDIAN("obsidian", "Obsidian Gray", 0xFF14161E),
+    BLACK("black", "AMOLED Black", 0xFF000000),
+    OBSIDIAN("obsidian", "Slate Dark", 0xFF14161E),
     SEPIA("sepia", "Warm Sepia", 0xFF2B231A),
     WHITE("white", "Paper White", 0xFFF5F5F0);
 
     companion object {
         fun fromId(id: String): ReaderBackground = entries.firstOrNull { it.id == id } ?: BLACK
+    }
+}
+
+enum class TapZoneLayout(val id: String, val label: String, val description: String) {
+    SIDES("sides", "Left / Center / Right", "30% side zones flip pages, center toggles HUD"),
+    L_SHAPE("l_shape", "L-Shaped", "Top & left edge previous, bottom & right next"),
+    KINDLISH("kindlish", "Kindlish", "Left 25% previous, right 75% next, top/center HUD"),
+    EDGES("edges", "Compact Edges", "Outer 18% edges flip pages, wide center HUD");
+
+    companion object {
+        fun fromId(id: String): TapZoneLayout = entries.firstOrNull { it.id == id } ?: SIDES
+    }
+}
+
+enum class ReaderTransitionMode(val id: String, val label: String) {
+    SLIDE("slide", "Slide"),
+    FADE("fade", "Fade"),
+    NONE("none", "Instant");
+
+    companion object {
+        fun fromId(id: String): ReaderTransitionMode = entries.firstOrNull { it.id == id } ?: SLIDE
     }
 }
 
@@ -81,12 +102,24 @@ enum class LibrarySort(val id: String, val label: String) {
 
 enum class ExtensionFormat(val id: String, val label: String, val executable: Boolean) {
     KOMA_JSON_ADAPTER("koma_json_v1", "Koma Declarative Adapter", true),
-    EXTERNAL_APK_INCOMPATIBLE("mihon_apk_legacy", "Mihon APK (Incompatible)", false);
+    MIHON_PROTOBUF_INDEX("mihon_apk_pb", "Mihon Extension (index.pb)", false),
+    MIHON_JSON_INDEX("mihon_apk_json", "Mihon Extension (index.json)", false),
+    EXTERNAL_APK_INCOMPATIBLE("mihon_apk_legacy", "Mihon APK Package", false);
 
     companion object {
         fun fromId(id: String): ExtensionFormat =
             entries.firstOrNull { it.id == id } ?: EXTERNAL_APK_INCOMPATIBLE
     }
+}
+
+enum class ExtensionCompatibilityStatus(val label: String) {
+    EXECUTABLE_KOMA_JSON("Executable (Koma Sandboxed)"),
+    VERIFIED_MIHON_RUNTIME_RESTRICTED("Verified APK • Runtime Restricted"),
+    COMPATIBLE_MIHON_METADATA("Compatible Metadata (v1.2–v1.5)"),
+    LIB_VERSION_INCOMPATIBLE("Incompatible Extension Lib Version"),
+    SIGNATURE_MISMATCH("Signing Key Fingerprint Mismatch"),
+    UNTRUSTED_REPO("Repository Untrusted"),
+    UNKNOWN("Pending Inspection")
 }
 
 enum class DownloadStatus(val label: String) {
@@ -100,13 +133,14 @@ enum class DownloadStatus(val label: String) {
 
 enum class HomeSectionType(val id: String, val title: String) {
     CONTINUE_READING("continue_reading", "Continue Reading"),
+    FAVORITE_SOURCES("favorite_sources", "Favorite Sources"),
     RECENTLY_UPDATED("recently_updated", "Recently Updated"),
     RECENTLY_ADDED("recently_added", "Recently Added"),
     POPULAR_MANGA("popular_manga", "Popular Manga"),
     TRENDING_MANGA("trending_manga", "Trending Manga"),
-    LATEST_CHAPTERS("latest_chapters", "Latest Chapters"),
-    RECOMMENDED_SERIES("recommended_series", "Recommended Series"),
-    RECENTLY_DOWNLOADED("recently_downloaded", "Recently Downloaded"),
+    LATEST_CHAPTERS("latest_chapters", "Latest Releases"),
+    RECOMMENDED_SERIES("recommended_series", "New Arrivals"),
+    RECENTLY_DOWNLOADED("recently_downloaded", "Downloaded"),
     READING_HISTORY("reading_history", "Reading History"),
     PERSONALIZED("personalized", "Picked For You");
 

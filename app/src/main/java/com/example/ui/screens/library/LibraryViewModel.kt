@@ -33,6 +33,8 @@ data class LibraryUiState(
     val mangaList: List<MangaCardUi> = emptyList(),
     val sort: LibrarySort = LibrarySort.LAST_READ,
     val sortAscending: Boolean = false,
+    val smartView: String = "all",
+    val groupBySource: Boolean = false,
     val filter: LibraryFilterState = LibraryFilterState(),
     val availableGenres: List<String> = emptyList(),
     val availableSources: List<String> = emptyList(),
@@ -85,8 +87,18 @@ class LibraryViewModel(
             allManga.filter { it.id in allowedIds }
         }
 
+        val weekAgo = System.currentTimeMillis() - 7L * 24L * 3600L * 1000L
+        val smartFiltered = when (prefs.librarySmartView) {
+            "unread" -> mangaInCategory.filter { it.unreadCount > 0 }
+            "recent_read" -> mangaInCategory.filter { it.lastReadAt > 0L }
+            "recent_updated" -> mangaInCategory.filter { it.latestUpdateAt >= weekAgo }
+            "downloaded" -> mangaInCategory.filter { it.id in downloadedMangaIds }
+            "completed" -> mangaInCategory.filter { MangaStatus.fromString(it.status) == MangaStatus.COMPLETED }
+            else -> mangaInCategory
+        }
+
         val f = local.filter
-        val filtered = mangaInCategory.filter { m ->
+        val filtered = smartFiltered.filter { m ->
             val matchQuery = f.searchQuery.isBlank() ||
                 m.title.contains(f.searchQuery, true) ||
                 m.altTitle.contains(f.searchQuery, true)
@@ -136,6 +148,8 @@ class LibraryViewModel(
             },
             sort = prefs.librarySort,
             sortAscending = prefs.librarySortAscending,
+            smartView = prefs.librarySmartView,
+            groupBySource = prefs.libraryGroupBySource,
             filter = f,
             availableGenres = genres,
             availableSources = sources,
@@ -160,6 +174,14 @@ class LibraryViewModel(
 
     fun setSort(sort: LibrarySort, ascending: Boolean) {
         viewModelScope.launch { prefsRepo.setLibrarySort(sort, ascending) }
+    }
+
+    fun setSmartView(view: String) {
+        viewModelScope.launch { prefsRepo.setLibrarySmartView(view) }
+    }
+
+    fun setGroupBySource(group: Boolean) {
+        viewModelScope.launch { prefsRepo.setLibraryGroupBySource(group) }
     }
 
     fun toggleLayoutMode() {
@@ -227,14 +249,29 @@ class LibraryViewModel(
         }
     }
 
-    fun createCategory(name: String) {
+    fun createCategory(
+        name: String,
+        colorHex: Long = 0xFFE11D48L,
+        iconName: String = "folder"
+    ) {
         if (name.isBlank()) return
-        viewModelScope.launch { mangaRepo.createCategory(name) }
+        viewModelScope.launch { mangaRepo.createCategory(name, colorHex, iconName) }
     }
 
     fun renameCategory(cat: CategoryEntity, newName: String) {
         if (newName.isBlank()) return
         viewModelScope.launch { mangaRepo.renameCategory(cat, newName) }
+    }
+
+    fun updateCategoryAppearance(
+        cat: CategoryEntity,
+        newName: String,
+        colorHex: Long,
+        iconName: String
+    ) {
+        viewModelScope.launch {
+            mangaRepo.updateCategoryAppearance(cat, newName, colorHex, iconName)
+        }
     }
 
     fun moveCategory(fromIdx: Int, toIdx: Int) {

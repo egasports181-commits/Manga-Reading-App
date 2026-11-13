@@ -13,6 +13,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.ui.components.LiquidGlassTopBar
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -29,16 +30,14 @@ fun MoreScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("More", style = MaterialTheme.typography.headlineMedium) }
-            )
+            LiquidGlassTopBar(title = "More")
         }
     ) { padding ->
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding),
-            contentPadding = PaddingValues(16.dp),
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 104.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             item {

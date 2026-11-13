@@ -3,7 +3,9 @@ package com.example.ui.screens.reader
 import android.app.Activity
 import android.content.pm.ActivityInfo
 import android.view.WindowManager
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
@@ -46,10 +48,53 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import coil.compose.AsyncImage
+import coil.compose.SubcomposeAsyncImage
 import com.example.domain.model.*
 import com.example.ui.components.ErrorRetryBanner
+import com.example.ui.components.LiquidGlassFloatingPill
+import com.example.ui.components.LiquidGlassSurface
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+
+enum class TapZoneAction { PREV, NEXT, TOGGLE_HUD }
+
+fun resolveReaderTapAction(
+    layout: TapZoneLayout,
+    relX: Float,
+    relY: Float,
+    isRtl: Boolean
+): TapZoneAction {
+    val raw = when (layout) {
+        TapZoneLayout.SIDES -> when {
+            relX < 0.30f -> TapZoneAction.PREV
+            relX > 0.70f -> TapZoneAction.NEXT
+            else -> TapZoneAction.TOGGLE_HUD
+        }
+        TapZoneLayout.L_SHAPE -> when {
+            relY < 0.28f && relX < 0.65f -> TapZoneAction.PREV
+            relX < 0.25f && relY < 0.72f -> TapZoneAction.PREV
+            relX > 0.72f || relY > 0.72f -> TapZoneAction.NEXT
+            else -> TapZoneAction.TOGGLE_HUD
+        }
+        TapZoneLayout.KINDLISH -> when {
+            relY < 0.25f -> TapZoneAction.TOGGLE_HUD
+            relX < 0.25f -> TapZoneAction.PREV
+            else -> TapZoneAction.NEXT
+        }
+        TapZoneLayout.EDGES -> when {
+            relX < 0.18f -> TapZoneAction.PREV
+            relX > 0.82f -> TapZoneAction.NEXT
+            else -> TapZoneAction.TOGGLE_HUD
+        }
+    }
+    return if (isRtl) {
+        when (raw) {
+            TapZoneAction.PREV -> TapZoneAction.NEXT
+            TapZoneAction.NEXT -> TapZoneAction.PREV
+            TapZoneAction.TOGGLE_HUD -> TapZoneAction.TOGGLE_HUD
+        }
+    } else raw
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -67,6 +112,19 @@ fun ReaderScreen(
     val activity = context as? Activity
     val scope = rememberCoroutineScope()
     val focusRequester = remember { FocusRequester() }
+
+    BackHandler(enabled = showSettingsSheet || showChaptersSheet) {
+        showSettingsSheet = false
+        showChaptersSheet = false
+    }
+
+    // Auto-hide HUD timer when configured
+    LaunchedEffect(showOverlay, state.autoHideMs, state.currentPage, showSettingsSheet, showChaptersSheet) {
+        if (showOverlay && state.autoHideMs > 0 && !showSettingsSheet && !showChaptersSheet) {
+            delay(state.autoHideMs.toLong())
+            showOverlay = false
+        }
+    }
 
     // Window Flags: Keep Screen Awake, Brightness, Orientation, System Bars
     DisposableEffect(
@@ -124,6 +182,8 @@ fun ReaderScreen(
         ImageScaleMode.ORIGINAL -> ContentScale.None
         ImageScaleMode.CUSTOM -> ContentScale.Fit
     }
+    val marginDp = state.pageMarginsDp.dp
+    val isCurrentBookmarked = state.currentPage in state.bookmarkedPages
 
     Box(
         modifier = Modifier
@@ -181,6 +241,7 @@ fun ReaderScreen(
                         LazyColumn(
                             state = listState,
                             verticalArrangement = Arrangement.spacedBy(if (mode == ReadingMode.WEBTOON) 0.dp else 12.dp),
+                            contentPadding = PaddingValues(horizontal = marginDp),
                             modifier = Modifier
                                 .fillMaxSize()
                                 .pointerInput(state.tapZonesEnabled) {
@@ -205,12 +266,16 @@ fun ReaderScreen(
                                 }
                         ) {
                             itemsIndexed(pages, key = { _, p -> p.index }) { _, page ->
-                                ZoomablePageImage(
+                                RetryablePageImage(
                                     imageUrl = page.imageUrl,
                                     contentDescription = "Page ${page.index + 1}",
                                     contentScale = ContentScale.FillWidth,
-                                    baseScale = if (state.scaleMode == ImageScaleMode.CUSTOM) state.customZoom else 1f,
-                                    modifier = Modifier.fillMaxWidth()
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .graphicsLayer(
+                                            scaleX = if (state.scaleMode == ImageScaleMode.CUSTOM) state.customZoom else 1f,
+                                            scaleY = if (state.scaleMode == ImageScaleMode.CUSTOM) state.customZoom else 1f
+                                        )
                                 )
                             }
                         }
@@ -229,16 +294,30 @@ fun ReaderScreen(
                         }
                         VerticalPager(
                             state = pagerState,
-                            modifier = Modifier.fillMaxSize()
+                            modifier = Modifier.fillMaxSize().padding(horizontal = marginDp)
                         ) { idx ->
+                            val scrollAction: (Int) -> Unit = { target ->
+                                scope.launch {
+                                    if (state.transitionMode == ReaderTransitionMode.NONE) {
+                                        pagerState.scrollToPage(target)
+                                    } else {
+                                        pagerState.animateScrollToPage(
+                                            target,
+                                            animationSpec = tween(if (state.transitionMode == ReaderTransitionMode.FADE) 180 else 280)
+                                        )
+                                    }
+                                }
+                            }
                             ReaderPageSurface(
                                 imageUrl = pages[idx].imageUrl,
+                                pageIndex = idx,
                                 contentScale = contentScale,
                                 baseScale = if (state.scaleMode == ImageScaleMode.CUSTOM) state.customZoom else 1f,
                                 tapZonesEnabled = state.tapZonesEnabled,
+                                tapZoneLayout = state.tapZoneLayout,
                                 isRtl = false,
-                                onPrev = { scope.launch { pagerState.animateScrollToPage((idx - 1).coerceAtLeast(0)) } },
-                                onNext = { scope.launch { pagerState.animateScrollToPage((idx + 1).coerceAtMost(pages.lastIndex)) } },
+                                onPrev = { scrollAction((idx - 1).coerceAtLeast(0)) },
+                                onNext = { scrollAction((idx + 1).coerceAtMost(pages.lastIndex)) },
                                 onToggleHud = { showOverlay = !showOverlay }
                             )
                         }
@@ -256,7 +335,7 @@ fun ReaderScreen(
                         HorizontalPager(
                             state = pagerState,
                             reverseLayout = true,
-                            modifier = Modifier.fillMaxSize()
+                            modifier = Modifier.fillMaxSize().padding(horizontal = marginDp)
                         ) { spreadIdx ->
                             val pair = spreads[spreadIdx]
                             Row(
@@ -267,8 +346,8 @@ fun ReaderScreen(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 pair.reversed().forEach { p ->
-                                    AsyncImage(
-                                        model = p.imageUrl,
+                                    RetryablePageImage(
+                                        imageUrl = p.imageUrl,
                                         contentDescription = "Page ${p.index + 1}",
                                         contentScale = ContentScale.Fit,
                                         modifier = Modifier.weight(1f).fillMaxHeight()
@@ -293,16 +372,30 @@ fun ReaderScreen(
                         HorizontalPager(
                             state = pagerState,
                             reverseLayout = isRtl,
-                            modifier = Modifier.fillMaxSize()
+                            modifier = Modifier.fillMaxSize().padding(horizontal = marginDp)
                         ) { idx ->
+                            val scrollAction: (Int) -> Unit = { target ->
+                                scope.launch {
+                                    if (state.transitionMode == ReaderTransitionMode.NONE) {
+                                        pagerState.scrollToPage(target)
+                                    } else {
+                                        pagerState.animateScrollToPage(
+                                            target,
+                                            animationSpec = tween(if (state.transitionMode == ReaderTransitionMode.FADE) 180 else 280)
+                                        )
+                                    }
+                                }
+                            }
                             ReaderPageSurface(
                                 imageUrl = pages[idx].imageUrl,
+                                pageIndex = idx,
                                 contentScale = contentScale,
                                 baseScale = if (state.scaleMode == ImageScaleMode.CUSTOM) state.customZoom else 1f,
                                 tapZonesEnabled = state.tapZonesEnabled,
+                                tapZoneLayout = state.tapZoneLayout,
                                 isRtl = isRtl,
-                                onPrev = { scope.launch { pagerState.animateScrollToPage((idx - 1).coerceAtLeast(0)) } },
-                                onNext = { scope.launch { pagerState.animateScrollToPage((idx + 1).coerceAtMost(pages.lastIndex)) } },
+                                onPrev = { scrollAction((idx - 1).coerceAtLeast(0)) },
+                                onNext = { scrollAction((idx + 1).coerceAtMost(pages.lastIndex)) },
                                 onToggleHud = { showOverlay = !showOverlay }
                             )
                         }
@@ -311,48 +404,57 @@ fun ReaderScreen(
             }
         }
 
-        // Persistent discreet page indicator when HUD is hidden
+        // Discreet floating liquid glass page pill when HUD is hidden
         if (!showOverlay && state.pages.isNotEmpty()) {
-            Surface(
-                color = Color.Black.copy(alpha = 0.55f),
-                shape = RoundedCornerShape(10.dp),
+            LiquidGlassFloatingPill(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .padding(bottom = 14.dp)
-                    .navigationBarsPadding()
+                    .navigationBarsPadding(),
+                onClick = { showOverlay = true }
             ) {
+                if (isCurrentBookmarked) {
+                    Icon(
+                        Icons.Default.Bookmark,
+                        contentDescription = "Bookmarked page",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(14.dp)
+                    )
+                }
                 Text(
                     text = "${state.currentPage + 1} / ${state.pages.size}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Color.White,
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                    style = MaterialTheme.typography.labelSmall
                 )
             }
         }
 
-        // Top HUD Overlay
+        // Top Liquid Glass HUD Overlay
         AnimatedVisibility(
             visible = showOverlay,
             enter = fadeIn(),
             exit = fadeOut(),
-            modifier = Modifier.align(Alignment.TopCenter)
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .statusBarsPadding()
+                .padding(horizontal = 12.dp, vertical = 8.dp)
         ) {
-            Surface(color = Color.Black.copy(alpha = 0.82f)) {
+            LiquidGlassSurface(
+                shape = RoundedCornerShape(22.dp),
+                shadowElevation = 12.dp
+            ) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .statusBarsPadding()
-                        .padding(horizontal = 8.dp, vertical = 8.dp),
+                        .padding(horizontal = 6.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Exit reader", tint = Color.White)
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Exit reader")
                     }
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
                             text = state.manga?.title ?: "",
                             style = MaterialTheme.typography.titleSmall,
-                            color = Color.White,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
@@ -362,38 +464,75 @@ fun ReaderScreen(
                                 if (state.isOfflineChapter) append(" • Offline")
                             },
                             style = MaterialTheme.typography.bodySmall,
-                            color = Color.White.copy(alpha = 0.75f),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
                     }
+                    IconButton(
+                        onClick = viewModel::toggleCurrentPageBookmark,
+                        modifier = Modifier.testTag("reader_bookmark_page_button")
+                    ) {
+                        Icon(
+                            if (isCurrentBookmarked) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
+                            contentDescription = "Bookmark page",
+                            tint = if (isCurrentBookmarked) MaterialTheme.colorScheme.primary else LocalContentColor.current
+                        )
+                    }
                     IconButton(onClick = { showChaptersSheet = true }) {
-                        Icon(Icons.Default.List, contentDescription = "Chapter list", tint = Color.White)
+                        Icon(Icons.Default.List, contentDescription = "Chapters & Bookmarks")
                     }
                     IconButton(
                         onClick = { showSettingsSheet = true },
                         modifier = Modifier.testTag("reader_settings_button")
                     ) {
-                        Icon(Icons.Default.Tune, contentDescription = "Reader settings", tint = Color.White)
+                        Icon(Icons.Default.Tune, contentDescription = "Reader settings")
                     }
                 }
             }
         }
 
-        // Bottom HUD Overlay
+        // Bottom Liquid Glass HUD Overlay
         AnimatedVisibility(
             visible = showOverlay && state.pages.isNotEmpty(),
             enter = fadeIn(),
             exit = fadeOut(),
-            modifier = Modifier.align(Alignment.BottomCenter)
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .navigationBarsPadding()
+                .padding(horizontal = 12.dp, vertical = 10.dp)
         ) {
-            Surface(color = Color.Black.copy(alpha = 0.85f)) {
+            LiquidGlassSurface(
+                shape = RoundedCornerShape(24.dp),
+                shadowElevation = 12.dp
+            ) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .navigationBarsPadding()
-                        .padding(horizontal = 12.dp, vertical = 10.dp)
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
+                    if (state.bookmarkedPages.isNotEmpty()) {
+                        Row(
+                            modifier = Modifier.horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Default.Bookmark,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            state.bookmarkedPages.sorted().forEach { bm ->
+                                AssistChip(
+                                    onClick = { viewModel.onPageChanged(bm) },
+                                    label = { Text("p.${bm + 1}") }
+                                )
+                            }
+                        }
+                    }
+
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -402,12 +541,11 @@ fun ReaderScreen(
                             onClick = viewModel::goToPreviousChapter,
                             enabled = state.hasPrevChapter
                         ) {
-                            Icon(Icons.AutoMirrored.Filled.NavigateBefore, contentDescription = "Previous chapter", tint = Color.White)
+                            Icon(Icons.AutoMirrored.Filled.NavigateBefore, contentDescription = "Previous chapter")
                         }
                         Text(
                             text = "${state.currentPage + 1}",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = Color.White
+                            style = MaterialTheme.typography.labelLarge
                         )
                         Slider(
                             value = state.currentPage.toFloat(),
@@ -417,14 +555,13 @@ fun ReaderScreen(
                         )
                         Text(
                             text = "${state.pages.size}",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = Color.White
+                            style = MaterialTheme.typography.labelLarge
                         )
                         IconButton(
                             onClick = viewModel::goToNextChapter,
                             enabled = state.hasNextChapter
                         ) {
-                            Icon(Icons.AutoMirrored.Filled.NavigateNext, contentDescription = "Next chapter", tint = Color.White)
+                            Icon(Icons.AutoMirrored.Filled.NavigateNext, contentDescription = "Next chapter")
                         }
                     }
                 }
@@ -441,6 +578,10 @@ fun ReaderScreen(
             onCustomZoom = viewModel::setCustomZoom,
             onBackground = viewModel::setBackground,
             onTapZones = viewModel::setTapZones,
+            onTapZoneLayout = viewModel::setTapZoneLayout,
+            onPageMargins = viewModel::setPageMarginsDp,
+            onAutoHideMs = viewModel::setAutoHideMs,
+            onTransitionMode = viewModel::setTransitionMode,
             onVolumeNav = viewModel::setVolumeNav,
             onKeepAwake = viewModel::setKeepAwake,
             onHideBars = viewModel::setHideSystemBars,
@@ -484,11 +625,57 @@ fun ReaderScreen(
 }
 
 @Composable
+private fun RetryablePageImage(
+    imageUrl: String,
+    contentDescription: String,
+    contentScale: ContentScale,
+    modifier: Modifier = Modifier
+) {
+    var retryNonce by remember(imageUrl) { mutableIntStateOf(0) }
+    val requestModel = remember(imageUrl, retryNonce) {
+        if (retryNonce == 0) imageUrl else "$imageUrl${if ('?' in imageUrl) '&' else '?'}komaRetry=$retryNonce"
+    }
+    SubcomposeAsyncImage(
+        model = requestModel,
+        contentDescription = contentDescription,
+        contentScale = contentScale,
+        modifier = modifier,
+        loading = {
+            Box(
+                modifier = Modifier.fillMaxSize().heightIn(min = 240.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(28.dp))
+            }
+        },
+        error = {
+            Column(
+                modifier = Modifier.fillMaxSize().heightIn(min = 240.dp).padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Icon(Icons.Default.BrokenImage, contentDescription = null, tint = Color.White.copy(alpha = 0.7f))
+                Spacer(Modifier.height(8.dp))
+                Text("Page failed to load", style = MaterialTheme.typography.bodySmall, color = Color.White)
+                Spacer(Modifier.height(8.dp))
+                FilledTonalButton(onClick = { retryNonce++ }) {
+                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Retry Page")
+                }
+            }
+        }
+    )
+}
+
+@Composable
 private fun ReaderPageSurface(
     imageUrl: String,
+    pageIndex: Int,
     contentScale: ContentScale,
     baseScale: Float,
     tapZonesEnabled: Boolean,
+    tapZoneLayout: TapZoneLayout,
     isRtl: Boolean,
     onPrev: () -> Unit,
     onNext: () -> Unit,
@@ -512,7 +699,7 @@ private fun ReaderPageSurface(
         modifier = Modifier
             .fillMaxSize()
             .then(if (scale > 1.05f) Modifier.transformable(transformState) else Modifier)
-            .pointerInput(tapZonesEnabled, isRtl) {
+            .pointerInput(tapZonesEnabled, tapZoneLayout, isRtl) {
                 detectTapGestures(
                     onDoubleTap = {
                         if (scale > 1.2f) {
@@ -528,20 +715,19 @@ private fun ReaderPageSurface(
                             onToggleHud()
                             return@detectTapGestures
                         }
-                        val relX = pos.x / size.width
-                        when {
-                            relX < 0.30f -> if (isRtl) onNext() else onPrev()
-                            relX > 0.70f -> if (isRtl) onPrev() else onNext()
-                            else -> onToggleHud()
+                        when (resolveReaderTapAction(tapZoneLayout, pos.x / size.width, pos.y / size.height, isRtl)) {
+                            TapZoneAction.PREV -> onPrev()
+                            TapZoneAction.NEXT -> onNext()
+                            TapZoneAction.TOGGLE_HUD -> onToggleHud()
                         }
                     }
                 )
             },
         contentAlignment = Alignment.Center
     ) {
-        AsyncImage(
-            model = imageUrl,
-            contentDescription = "Manga page",
+        RetryablePageImage(
+            imageUrl = imageUrl,
+            contentDescription = "Manga page ${pageIndex + 1}",
             contentScale = contentScale,
             modifier = Modifier
                 .fillMaxSize()
@@ -555,22 +741,6 @@ private fun ReaderPageSurface(
     }
 }
 
-@Composable
-private fun ZoomablePageImage(
-    imageUrl: String,
-    contentDescription: String,
-    contentScale: ContentScale,
-    baseScale: Float,
-    modifier: Modifier = Modifier
-) {
-    AsyncImage(
-        model = imageUrl,
-        contentDescription = contentDescription,
-        contentScale = contentScale,
-        modifier = modifier.graphicsLayer(scaleX = baseScale, scaleY = baseScale)
-    )
-}
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ReaderSettingsBottomSheet(
@@ -581,6 +751,10 @@ private fun ReaderSettingsBottomSheet(
     onCustomZoom: (Float) -> Unit,
     onBackground: (ReaderBackground) -> Unit,
     onTapZones: (Boolean) -> Unit,
+    onTapZoneLayout: (TapZoneLayout) -> Unit,
+    onPageMargins: (Int) -> Unit,
+    onAutoHideMs: (Int) -> Unit,
+    onTransitionMode: (ReaderTransitionMode) -> Unit,
     onVolumeNav: (Boolean) -> Unit,
     onKeepAwake: (Boolean) -> Unit,
     onHideBars: (Boolean) -> Unit,
@@ -614,6 +788,27 @@ private fun ReaderSettingsBottomSheet(
             }
 
             item {
+                Text("Tap Zone Layout", style = MaterialTheme.typography.labelLarge)
+                Row(
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    TapZoneLayout.entries.forEach { layout ->
+                        FilterChip(
+                            selected = state.tapZoneLayout == layout,
+                            onClick = { onTapZoneLayout(layout) },
+                            label = { Text(layout.label) }
+                        )
+                    }
+                }
+                Text(
+                    state.tapZoneLayout.description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            item {
                 Text("Image Scaling", style = MaterialTheme.typography.labelLarge)
                 Row(
                     modifier = Modifier.horizontalScroll(rememberScrollState()),
@@ -638,6 +833,29 @@ private fun ReaderSettingsBottomSheet(
             }
 
             item {
+                Text("Side Margins: ${state.pageMarginsDp} dp", style = MaterialTheme.typography.labelLarge)
+                Slider(
+                    value = state.pageMarginsDp.toFloat(),
+                    onValueChange = { onPageMargins(it.toInt()) },
+                    valueRange = 0f..32f,
+                    steps = 7
+                )
+            }
+
+            item {
+                Text("Page Transition", style = MaterialTheme.typography.labelLarge)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ReaderTransitionMode.entries.forEach { tm ->
+                        FilterChip(
+                            selected = state.transitionMode == tm,
+                            onClick = { onTransitionMode(tm) },
+                            label = { Text(tm.label) }
+                        )
+                    }
+                }
+            }
+
+            item {
                 Text("Background Color", style = MaterialTheme.typography.labelLarge)
                 Row(
                     modifier = Modifier.horizontalScroll(rememberScrollState()),
@@ -648,6 +866,19 @@ private fun ReaderSettingsBottomSheet(
                             selected = state.background == bg,
                             onClick = { onBackground(bg) },
                             label = { Text(bg.label) }
+                        )
+                    }
+                }
+            }
+
+            item {
+                Text("Auto-Hide Controls Timer", style = MaterialTheme.typography.labelLarge)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(0 to "Manual", 3000 to "3s", 5000 to "5s").forEach { (ms, lbl) ->
+                        FilterChip(
+                            selected = state.autoHideMs == ms,
+                            onClick = { onAutoHideMs(ms) },
+                            label = { Text(lbl) }
                         )
                     }
                 }

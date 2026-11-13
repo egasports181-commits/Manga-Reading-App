@@ -284,6 +284,26 @@ class MangaRepository(
         chapterDao.setChapterBookmarked(chapterId, bookmarked)
     }
 
+    fun parseBookmarkedPages(json: String): Set<Int> {
+        if (json.isBlank() || json == "[]") return emptySet()
+        return runCatching {
+            kotlinx.serialization.json.Json.decodeFromString<List<Int>>(json).toSet()
+        }.getOrDefault(emptySet())
+    }
+
+    suspend fun togglePageBookmark(chapterId: String, pageIndex: Int): Set<Int> {
+        val chapter = chapterDao.getChapterById(chapterId) ?: return emptySet()
+        val current = parseBookmarkedPages(chapter.bookmarkedPagesJson).toMutableSet()
+        if (pageIndex in current) current.remove(pageIndex) else current.add(pageIndex)
+        val sorted = current.sorted()
+        val encoded = kotlinx.serialization.json.Json.encodeToString(
+            kotlinx.serialization.builtins.ListSerializer(kotlinx.serialization.serializer<Int>()),
+            sorted
+        )
+        chapterDao.updateBookmarkedPages(chapterId, encoded)
+        return current
+    }
+
     suspend fun saveReaderProgress(
         mangaId: String,
         chapterId: String,
@@ -332,14 +352,40 @@ class MangaRepository(
         )
     }
 
-    suspend fun createCategory(name: String) {
+    suspend fun createCategory(
+        name: String,
+        colorHex: Long = 0xFFE11D48L,
+        iconName: String = "folder"
+    ) {
         val current = categoryDao.getCategoriesOnce()
         val nextOrder = (current.maxOfOrNull { it.sortOrder } ?: 0) + 1
-        categoryDao.insertCategory(CategoryEntity(name = name.trim(), sortOrder = nextOrder))
+        categoryDao.insertCategory(
+            CategoryEntity(
+                name = name.trim(),
+                sortOrder = nextOrder,
+                colorHex = colorHex,
+                iconName = iconName
+            )
+        )
     }
 
     suspend fun renameCategory(category: CategoryEntity, newName: String) {
         categoryDao.updateCategory(category.copy(name = newName.trim()))
+    }
+
+    suspend fun updateCategoryAppearance(
+        category: CategoryEntity,
+        newName: String,
+        colorHex: Long,
+        iconName: String
+    ) {
+        categoryDao.updateCategory(
+            category.copy(
+                name = newName.trim().ifBlank { category.name },
+                colorHex = colorHex,
+                iconName = iconName
+            )
+        )
     }
 
     suspend fun reorderCategories(ordered: List<CategoryEntity>) {

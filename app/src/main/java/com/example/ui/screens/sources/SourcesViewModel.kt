@@ -3,14 +3,18 @@ package com.example.ui.screens.sources
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.example.data.local.entity.ExtensionInstallHistoryEntity
 import com.example.data.local.entity.ExtensionPackageEntity
 import com.example.data.local.entity.ExtensionRepoEntity
 import com.example.data.local.entity.SearchHistoryEntity
 import com.example.data.preferences.AppPreferencesRepository
+import com.example.data.preferences.UserPreferences
 import com.example.data.repository.ExtensionRepository
 import com.example.data.repository.MangaRepository
 import com.example.domain.model.*
-import com.example.source.MangaSourceAdapter
+import com.example.extension.LoadedExtensionDescriptor
+import com.example.network.NetworkErrorFormatter
+import com.example.source.ConfiguredSourceEntry
 import com.example.source.SourceRegistry
 import com.example.ui.components.MangaCardUi
 import kotlinx.coroutines.async
@@ -27,41 +31,72 @@ data class SourceMetaUi(
     val supportsFilters: Boolean,
     val supportsLogin: Boolean,
     val isDemo: Boolean,
-    val isAvailable: Boolean? = null
-)
+    val isEnabled: Boolean = true,
+    val healthStatus: SourceHealthStatus? = null
+) {
+    val isAvailable: Boolean? get() = healthStatus?.isOnline
+}
 
 enum class ExtensionSortOption(val label: String) {
+    POPULARITY("Popularity"),
     NAME("Name"),
     LANGUAGE("Language"),
-    POPULARITY("Popularity"),
+    VERSION("Version"),
+    RECENT("Recently Updated"),
     UPDATES("Update Status")
+}
+
+enum class ExtensionStoreTab(val label: String) {
+    ALL("All"),
+    INSTALLED("Installed"),
+    UPDATES("Updates"),
+    REPOSITORIES("Repositories")
+}
+
+enum class ExtensionCompatFilter(val label: String) {
+    ALL("All Formats"),
+    EXECUTABLE("Executable Only"),
+    VERIFIED_APK("Mihon APK"),
+    ISSUES("Warnings / Errors")
 }
 
 data class SourcesUiState(
     val sources: List<SourceMetaUi> = emptyList(),
+    val verifiedExtensionDescriptors: List<LoadedExtensionDescriptor> = emptyList(),
     val selectedLangFilter: String = "all",
     val selectedCategoryFilter: String = "all",
     val repos: List<ExtensionRepoEntity> = emptyList(),
     val packages: List<ExtensionPackageEntity> = emptyList(),
+    val allPackageLanguages: List<String> = emptyList(),
+    val extSubTab: ExtensionStoreTab = ExtensionStoreTab.ALL,
     val extSearchQuery: String = "",
+    val extLangFilter: String = "all",
+    val extRepoFilterId: Long? = null,
+    val extCompatFilter: ExtensionCompatFilter = ExtensionCompatFilter.ALL,
     val extSort: ExtensionSortOption = ExtensionSortOption.POPULARITY,
-    val extShowInstalledOnly: Boolean = false,
+    val extDownloadProgress: Map<String, Float> = emptyMap(),
+    val installHistory: List<ExtensionInstallHistoryEntity> = emptyList(),
     val isRefreshingRepos: Boolean = false,
     val statusMessage: String? = null,
     val errorMessage: String? = null,
+    val exportedReposJson: String? = null,
     val safLocalFolderUri: String = "",
     // Global Search
     val globalQuery: String = "",
     val globalFilters: SearchFilters = SearchFilters(),
+    val disabledSearchSourceIds: Set<String> = emptySet(),
     val isSearchingGlobal: Boolean = false,
     val globalResults: Map<String, List<MangaCardUi>> = emptyMap(),
-    val searchHistory: List<SearchHistoryEntity> = emptyList()
+    val globalSourceErrors: Map<String, String> = emptyMap(),
+    val duplicateTitlesAcrossSources: Set<String> = emptySet(),
+    val searchHistory: List<SearchHistoryEntity> = emptyList(),
+    val searchSuggestions: List<String> = emptyList()
 )
 
 data class BrowseSourceUiState(
     val sourceId: String = "",
     val sourceName: String = "",
-    val mode: String = "popular", // popular, latest, search
+    val mode: String = "popular",
     val query: String = "",
     val filters: SearchFilters = SearchFilters(),
     val items: List<MangaCardUi> = emptyList(),
@@ -81,98 +116,173 @@ class SourcesViewModel(
     private val prefsRepo: AppPreferencesRepository
 ) : ViewModel() {
 
-    private val availabilityCache = MutableStateFlow<Map<String, Boolean>>(emptyMap())
+    private val healthCache = MutableStateFlow<Map<String, SourceHealthStatus>>(emptyMap())
     private val localUiState = MutableStateFlow(SourcesLocalControls())
     private val browseState = MutableStateFlow(BrowseSourceUiState())
 
     private data class SourcesLocalControls(
         val langFilter: String = "all",
         val categoryFilter: String = "all",
+        val extSubTab: ExtensionStoreTab = ExtensionStoreTab.ALL,
         val extQuery: String = "",
+        val extLangFilter: String = "all",
+        val extRepoFilterId: Long? = null,
+        val extCompatFilter: ExtensionCompatFilter = ExtensionCompatFilter.ALL,
         val extSort: ExtensionSortOption = ExtensionSortOption.POPULARITY,
-        val extInstalledOnly: Boolean = false,
         val isRefreshingRepos: Boolean = false,
         val statusMsg: String? = null,
         val errorMsg: String? = null,
+        val exportedReposJson: String? = null,
         val globalQuery: String = "",
         val globalFilters: SearchFilters = SearchFilters(),
         val isSearchingGlobal: Boolean = false,
-        val globalResults: Map<String, List<MangaCardUi>> = emptyMap()
+        val globalResults: Map<String, List<MangaCardUi>> = emptyMap(),
+        val globalErrors: Map<String, String> = emptyMap()
+    )
+
+    private val extensionFlows = combine(
+        extRepo.repos,
+        extRepo.packages,
+        extRepo.downloadProgress,
+        extRepo.installHistory,
+        sourceRegistry.verifiedExtensionDescriptors
+    ) { repos, pkgs, progress, history, descriptors ->
+        ExtensionSnapshot(repos, pkgs, progress, history, descriptors)
+    }
+
+    private data class ExtensionSnapshot(
+        val repos: List<ExtensionRepoEntity>,
+        val pkgs: List<ExtensionPackageEntity>,
+        val progress: Map<String, Float>,
+        val history: List<ExtensionInstallHistoryEntity>,
+        val descriptors: List<LoadedExtensionDescriptor>
     )
 
     val uiState: StateFlow<SourcesUiState> = combine(
-        sourceRegistry.activeSources,
-        availabilityCache,
-        extRepo.repos,
-        extRepo.packages,
+        sourceRegistry.allConfiguredSources,
+        healthCache,
+        extensionFlows,
         mangaRepo.searchHistory,
         prefsRepo.preferences,
         localUiState
     ) { values ->
         @Suppress("UNCHECKED_CAST")
-        val adapters = values[0] as List<MangaSourceAdapter>
+        val configured = values[0] as List<ConfiguredSourceEntry>
         @Suppress("UNCHECKED_CAST")
-        val avail = values[1] as Map<String, Boolean>
+        val healthMap = values[1] as Map<String, SourceHealthStatus>
+        val extSnap = values[2] as ExtensionSnapshot
         @Suppress("UNCHECKED_CAST")
-        val repos = values[2] as List<ExtensionRepoEntity>
-        @Suppress("UNCHECKED_CAST")
-        val pkgs = values[3] as List<ExtensionPackageEntity>
-        @Suppress("UNCHECKED_CAST")
-        val history = values[4] as List<SearchHistoryEntity>
-        val prefs = values[5] as com.example.data.preferences.UserPreferences
-        val local = values[6] as SourcesLocalControls
+        val history = values[3] as List<SearchHistoryEntity>
+        val prefs = values[4] as UserPreferences
+        val local = values[5] as SourcesLocalControls
 
-        val metaList = adapters.map {
+        val metaList = configured.map { entry ->
+            val a = entry.adapter
             SourceMetaUi(
-                id = it.id,
-                name = it.name,
-                language = it.language,
-                category = it.category,
-                baseUrl = it.baseUrl,
-                supportsFilters = it.supportsFilters,
-                supportsLogin = it.supportsLogin,
-                isDemo = it.isDemoSource,
-                isAvailable = avail[it.id]
+                id = a.id,
+                name = a.name,
+                language = a.language,
+                category = a.category,
+                baseUrl = a.baseUrl,
+                supportsFilters = a.supportsFilters,
+                supportsLogin = a.supportsLogin,
+                isDemo = a.isDemoSource,
+                isEnabled = entry.isEnabled,
+                healthStatus = healthMap[a.id]
             )
         }.filter {
             (local.langFilter == "all" || it.language.equals(local.langFilter, true)) &&
                 (local.categoryFilter == "all" || it.category.equals(local.categoryFilter, true))
         }
 
-        val filteredPkgs = pkgs.filter { pkg ->
+        val enabledRepoIds = extSnap.repos.filter { it.isEnabled }.map { it.id }.toSet()
+        val allLangs = extSnap.pkgs.map { it.language.lowercase() }
+            .filter { it.isNotBlank() }
+            .distinct()
+            .sorted()
+
+        val filteredPkgs = extSnap.pkgs.filter { pkg ->
+            val fromEnabledRepo = pkg.repoId == null || pkg.repoId in enabledRepoIds || pkg.isInstalled || pkg.localApkPath.isNotBlank()
             val matchesQuery = local.extQuery.isBlank() ||
                 pkg.name.contains(local.extQuery, true) ||
                 pkg.pkgId.contains(local.extQuery, true) ||
-                pkg.author.contains(local.extQuery, true)
-            val matchesInstalled = !local.extInstalledOnly || pkg.isInstalled
-            matchesQuery && matchesInstalled
+                pkg.author.contains(local.extQuery, true) ||
+                pkg.sourcesJson.contains(local.extQuery, true)
+            val matchesLang = local.extLangFilter == "all" || pkg.language.equals(local.extLangFilter, true)
+            val matchesRepo = local.extRepoFilterId == null || pkg.repoId == local.extRepoFilterId
+            val matchesSubTab = when (local.extSubTab) {
+                ExtensionStoreTab.ALL -> true
+                ExtensionStoreTab.INSTALLED -> pkg.isInstalled || pkg.localApkPath.isNotBlank()
+                ExtensionStoreTab.UPDATES -> (pkg.isInstalled || pkg.localApkPath.isNotBlank()) && pkg.hasUpdate
+                ExtensionStoreTab.REPOSITORIES -> true
+            }
+            val matchesCompat = when (local.extCompatFilter) {
+                ExtensionCompatFilter.ALL -> true
+                ExtensionCompatFilter.EXECUTABLE -> pkg.format == ExtensionFormat.KOMA_JSON_ADAPTER.id
+                ExtensionCompatFilter.VERIFIED_APK -> pkg.format != ExtensionFormat.KOMA_JSON_ADAPTER.id
+                ExtensionCompatFilter.ISSUES -> !pkg.installError.isNullOrBlank() ||
+                    pkg.compatibilityStatus == ExtensionCompatibilityStatus.SIGNATURE_MISMATCH.name ||
+                    pkg.compatibilityStatus == ExtensionCompatibilityStatus.LIB_VERSION_INCOMPATIBLE.name ||
+                    pkg.compatibilityStatus == ExtensionCompatibilityStatus.UNTRUSTED_REPO.name
+            }
+            fromEnabledRepo && matchesQuery && matchesLang && matchesRepo && matchesSubTab && matchesCompat
         }.let { list ->
             when (local.extSort) {
                 ExtensionSortOption.NAME -> list.sortedBy { it.name.lowercase() }
                 ExtensionSortOption.LANGUAGE -> list.sortedBy { it.language.lowercase() }
                 ExtensionSortOption.POPULARITY -> list.sortedByDescending { it.popularity }
+                ExtensionSortOption.VERSION -> list.sortedByDescending { it.latestVersionCode }
+                ExtensionSortOption.RECENT -> list.sortedByDescending { it.updatedAt }
                 ExtensionSortOption.UPDATES -> list.sortedByDescending { it.hasUpdate }
             }
         }
 
+        val duplicateTitles = local.globalResults.values
+            .flatMap { list -> list.map { it.title.trim().lowercase() }.distinct() }
+            .groupingBy { it }
+            .eachCount()
+            .filterValues { it > 1 }
+            .keys
+
+        val suggestions = if (local.globalQuery.isBlank()) {
+            history.take(5).map { it.query }
+        } else {
+            history.map { it.query }
+                .filter { it.contains(local.globalQuery, ignoreCase = true) && !it.equals(local.globalQuery, true) }
+                .distinct()
+                .take(5)
+        }
+
         SourcesUiState(
             sources = metaList,
+            verifiedExtensionDescriptors = extSnap.descriptors,
             selectedLangFilter = local.langFilter,
             selectedCategoryFilter = local.categoryFilter,
-            repos = repos,
+            repos = extSnap.repos,
             packages = filteredPkgs,
+            allPackageLanguages = allLangs,
+            extSubTab = local.extSubTab,
             extSearchQuery = local.extQuery,
+            extLangFilter = local.extLangFilter,
+            extRepoFilterId = local.extRepoFilterId,
+            extCompatFilter = local.extCompatFilter,
             extSort = local.extSort,
-            extShowInstalledOnly = local.extInstalledOnly,
+            extDownloadProgress = extSnap.progress,
+            installHistory = extSnap.history,
             isRefreshingRepos = local.isRefreshingRepos,
             statusMessage = local.statusMsg,
             errorMessage = local.errorMsg,
+            exportedReposJson = local.exportedReposJson,
             safLocalFolderUri = prefs.localSafSourceTreeUri,
             globalQuery = local.globalQuery,
             globalFilters = local.globalFilters,
+            disabledSearchSourceIds = prefs.disabledSearchSourceIds,
             isSearchingGlobal = local.isSearchingGlobal,
             globalResults = local.globalResults,
-            searchHistory = history
+            globalSourceErrors = local.globalErrors,
+            duplicateTitlesAcrossSources = duplicateTitles,
+            searchHistory = history,
+            searchSuggestions = suggestions
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), SourcesUiState())
 
@@ -184,11 +294,33 @@ class SourcesViewModel(
 
     fun checkSourceAvailability() {
         viewModelScope.launch {
-            val adapters = sourceRegistry.activeSources.first()
-            val results = adapters.map { adapter ->
-                async { adapter.id to runCatching { adapter.isAvailable() }.getOrDefault(false) }
+            val entries = sourceRegistry.allConfiguredSources.first().filter { it.isEnabled }
+            val results = entries.map { entry ->
+                async {
+                    val status = runCatching { entry.adapter.checkStatus() }.getOrElse {
+                        SourceHealthStatus(isOnline = false, errorReason = NetworkErrorFormatter.describe(it))
+                    }
+                    entry.adapter.id to status
+                }
             }.awaitAll().toMap()
-            availabilityCache.value = results
+            healthCache.value = results
+        }
+    }
+
+    fun setSourceEnabled(sourceId: String, enabled: Boolean) {
+        viewModelScope.launch {
+            val current = prefsRepo.preferences.first().disabledSourceIds.toMutableSet()
+            if (enabled) current.remove(sourceId) else current.add(sourceId)
+            prefsRepo.setDisabledSourceIds(current)
+            checkSourceAvailability()
+        }
+    }
+
+    fun toggleSearchSourceEnabled(sourceId: String) {
+        viewModelScope.launch {
+            val current = prefsRepo.preferences.first().disabledSearchSourceIds.toMutableSet()
+            if (sourceId in current) current.remove(sourceId) else current.add(sourceId)
+            prefsRepo.setDisabledSearchSourceIds(current)
         }
     }
 
@@ -208,20 +340,36 @@ class SourcesViewModel(
         }
     }
 
+    fun selectExtSubTab(tab: ExtensionStoreTab) {
+        localUiState.update { it.copy(extSubTab = tab) }
+    }
+
     fun updateExtSearch(query: String) {
         localUiState.update { it.copy(extQuery = query) }
+    }
+
+    fun updateExtLangFilter(lang: String) {
+        localUiState.update { it.copy(extLangFilter = lang) }
+    }
+
+    fun updateExtRepoFilter(repoId: Long?) {
+        localUiState.update { it.copy(extRepoFilterId = repoId) }
+    }
+
+    fun updateExtCompatFilter(filter: ExtensionCompatFilter) {
+        localUiState.update { it.copy(extCompatFilter = filter) }
     }
 
     fun updateExtSort(sort: ExtensionSortOption) {
         localUiState.update { it.copy(extSort = sort) }
     }
 
-    fun toggleExtInstalledOnly(installedOnly: Boolean) {
-        localUiState.update { it.copy(extInstalledOnly = installedOnly) }
-    }
-
     fun clearBannerMessages() {
         localUiState.update { it.copy(statusMsg = null, errorMsg = null) }
+    }
+
+    fun dismissExportJson() {
+        localUiState.update { it.copy(exportedReposJson = null) }
     }
 
     fun addRepository(url: String, name: String, fingerprint: String) {
@@ -230,7 +378,11 @@ class SourcesViewModel(
             val res = extRepo.addRepository(url, name, fingerprint)
             localUiState.update {
                 if (res.isSuccess) {
-                    it.copy(isRefreshingRepos = false, statusMsg = "Repository '${res.getOrNull()?.name}' added and indexed.")
+                    val saved = res.getOrNull()
+                    it.copy(
+                        isRefreshingRepos = false,
+                        statusMsg = "Repository '${saved?.displayName?.ifBlank { saved.name }}' indexed (${saved?.extensionCount ?: 0} items)."
+                    )
                 } else {
                     it.copy(isRefreshingRepos = false, errorMsg = res.exceptionOrNull()?.message ?: "Failed to add repository")
                 }
@@ -244,7 +396,7 @@ class SourcesViewModel(
             val res = extRepo.refreshRepository(repo)
             localUiState.update {
                 if (res.isSuccess) {
-                    it.copy(isRefreshingRepos = false, statusMsg = "Refreshed ${repo.name}: ${res.getOrNull()} packages.")
+                    it.copy(isRefreshingRepos = false, statusMsg = "Refreshed ${repo.displayName.ifBlank { repo.name }}: ${res.getOrNull()} extensions.")
                 } else {
                     it.copy(isRefreshingRepos = false, errorMsg = res.exceptionOrNull()?.message ?: "Refresh failed")
                 }
@@ -252,27 +404,92 @@ class SourcesViewModel(
         }
     }
 
-    fun trustRepository(repo: ExtensionRepoEntity, trusted: Boolean) {
+    fun refreshAllEnabledRepos(onlyFailed: Boolean = false) {
         viewModelScope.launch {
-            extRepo.setRepoTrusted(repo, trusted)
+            localUiState.update { it.copy(isRefreshingRepos = true, errorMsg = null, statusMsg = null) }
+            val report = extRepo.refreshAllEnabledRepos(onlyFailed)
+            localUiState.update {
+                if (report.totalAttempted == 0) {
+                    it.copy(isRefreshingRepos = false, statusMsg = "No matching enabled repositories to refresh.")
+                } else if (report.failedRepos == 0) {
+                    it.copy(
+                        isRefreshingRepos = false,
+                        statusMsg = "Synced ${report.succeededRepos}/${report.totalAttempted} repos (${report.totalPackagesLoaded} extensions indexed)."
+                    )
+                } else {
+                    it.copy(
+                        isRefreshingRepos = false,
+                        statusMsg = "Synced ${report.succeededRepos}/${report.totalAttempted} repos (${report.totalPackagesLoaded} extensions).",
+                        errorMsg = "${report.failedRepos} repo(s) failed: ${report.errorsByRepo.entries.firstOrNull()?.let { e -> "${e.key}: ${e.value}" } ?: ""}"
+                    )
+                }
+            }
         }
+    }
+
+    fun restoreBuiltInRepos() {
+        viewModelScope.launch {
+            val count = extRepo.seedDefaultRepositoriesIfMissing(forceRestore = true)
+            localUiState.update {
+                it.copy(statusMsg = if (count > 0) "Restored $count built-in repository(ies)." else "All 8 default repositories are already configured.")
+            }
+        }
+    }
+
+    fun setRepoEnabled(repo: ExtensionRepoEntity, enabled: Boolean) {
+        viewModelScope.launch { extRepo.setRepoEnabled(repo, enabled) }
+    }
+
+    fun trustRepository(repo: ExtensionRepoEntity, trusted: Boolean) {
+        viewModelScope.launch { extRepo.setRepoTrusted(repo, trusted) }
     }
 
     fun removeRepository(repo: ExtensionRepoEntity) {
         viewModelScope.launch {
             extRepo.removeRepository(repo)
-            localUiState.update { it.copy(statusMsg = "Removed repository ${repo.name}.") }
+            localUiState.update { it.copy(statusMsg = "Removed repository ${repo.displayName.ifBlank { repo.name }}.") }
+        }
+    }
+
+    fun exportRepositories() {
+        viewModelScope.launch {
+            val json = extRepo.exportRepositoriesJson()
+            localUiState.update { it.copy(exportedReposJson = json) }
+        }
+    }
+
+    fun importRepositories(rawJson: String) {
+        viewModelScope.launch {
+            val res = extRepo.importRepositoriesJson(rawJson)
+            localUiState.update {
+                if (res.isSuccess) {
+                    it.copy(statusMsg = "Imported ${res.getOrDefault(0)} new HTTPS repository(ies). Tap Refresh All to index.")
+                } else {
+                    it.copy(errorMsg = "Invalid repository JSON bundle: ${res.exceptionOrNull()?.message}")
+                }
+            }
         }
     }
 
     fun installOrUpdateExtension(pkg: ExtensionPackageEntity) {
         viewModelScope.launch {
-            val res = extRepo.installExtension(pkg)
-            localUiState.update {
-                if (res.isSuccess) {
-                    it.copy(statusMsg = "${pkg.name} v${pkg.latestVersionName} installed.")
-                } else {
-                    it.copy(errorMsg = res.exceptionOrNull()?.message ?: "Installation blocked.")
+            if (pkg.format == ExtensionFormat.KOMA_JSON_ADAPTER.id) {
+                val res = extRepo.installExtension(pkg)
+                localUiState.update {
+                    if (res.isSuccess) {
+                        it.copy(statusMsg = "${pkg.name} v${pkg.latestVersionName} installed & activated.")
+                    } else {
+                        it.copy(errorMsg = res.exceptionOrNull()?.message ?: "Installation blocked.")
+                    }
+                }
+            } else {
+                val res = extRepo.downloadAndVerifyMihonApk(pkg)
+                localUiState.update {
+                    if (res.isSuccess) {
+                        it.copy(statusMsg = "Downloaded & SHA-256 verified ${pkg.name} APK (${res.getOrNull()?.libVersion}). In-app DEX execution stays restricted per Play & security rules.")
+                    } else {
+                        it.copy(errorMsg = res.exceptionOrNull()?.message ?: "APK verification failed.")
+                    }
                 }
             }
         }
@@ -293,7 +510,7 @@ class SourcesViewModel(
     fun uninstallExtension(pkgId: String) {
         viewModelScope.launch {
             extRepo.uninstallExtension(pkgId)
-            localUiState.update { it.copy(statusMsg = "Extension uninstalled.") }
+            localUiState.update { it.copy(statusMsg = "Extension & cached archive removed.") }
         }
     }
 
@@ -311,12 +528,18 @@ class SourcesViewModel(
         val filters = localUiState.value.globalFilters
         viewModelScope.launch {
             if (query.isNotBlank()) mangaRepo.recordSearch(query)
-            localUiState.update { it.copy(isSearchingGlobal = true, errorMsg = null) }
+            localUiState.update { it.copy(isSearchingGlobal = true, errorMsg = null, globalErrors = emptyMap()) }
+            val prefs = prefsRepo.preferences.first()
             val sources = sourceRegistry.activeSources.first()
-            val resultPairs = sources.map { source ->
+                .filter { it.id !in prefs.disabledSearchSourceIds }
+
+            val resultsMap = linkedMapOf<String, List<MangaCardUi>>()
+            val errorsMap = linkedMapOf<String, String>()
+
+            val outcomes = sources.map { source ->
                 async {
-                    val items = runCatching {
-                        source.search(query, 1, filters).items.map {
+                    try {
+                        val items = source.search(query, 1, filters).items.map {
                             MangaCardUi(
                                 id = "${it.sourceId}::${it.mangaKey}",
                                 title = it.title,
@@ -328,13 +551,24 @@ class SourcesViewModel(
                                 isDemoData = it.isDemoData
                             )
                         }
-                    }.getOrDefault(emptyList())
-                    source.name to items
+                        Triple(source.name, items, null as String?)
+                    } catch (e: Exception) {
+                        Triple(source.name, emptyList(), NetworkErrorFormatter.describe(e))
+                    }
                 }
-            }.awaitAll().filter { it.second.isNotEmpty() }.toMap()
+            }.awaitAll()
+
+            outcomes.forEach { (sourceName, items, err) ->
+                if (items.isNotEmpty()) resultsMap[sourceName] = items
+                if (err != null) errorsMap[sourceName] = err
+            }
 
             localUiState.update {
-                it.copy(isSearchingGlobal = false, globalResults = resultPairs)
+                it.copy(
+                    isSearchingGlobal = false,
+                    globalResults = resultsMap,
+                    globalErrors = errorsMap
+                )
             }
         }
     }
@@ -410,7 +644,7 @@ class SourcesViewModel(
                 }
             } catch (e: Exception) {
                 browseState.update {
-                    it.copy(isLoading = false, error = e.message ?: "Failed to load source catalog")
+                    it.copy(isLoading = false, error = NetworkErrorFormatter.describe(e))
                 }
             }
         }
