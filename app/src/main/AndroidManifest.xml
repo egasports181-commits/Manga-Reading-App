@@ -14,6 +14,9 @@
             <action android:name="tachiyomi.extension" />
         </intent>
         <intent>
+            <action android:name="com.koma.extension.IPC_PROVIDER" />
+        </intent>
+        <intent>
             <action android:name="android.intent.action.VIEW" />
             <data android:scheme="https" />
         </intent>

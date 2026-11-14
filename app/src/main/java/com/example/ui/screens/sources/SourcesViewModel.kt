@@ -219,14 +219,20 @@ class SourcesViewModel(
             val matchesCompat = when (local.extCompatFilter) {
                 ExtensionCompatFilter.ALL -> true
                 ExtensionCompatFilter.EXECUTABLE ->
-                    pkg.format == ExtensionFormat.KOMA_JSON_ADAPTER.id &&
-                        pkg.compatibilityStatus == ExtensionCompatibilityStatus.EXECUTABLE_KOMA_JSON.name
+                    (pkg.format == ExtensionFormat.KOMA_JSON_ADAPTER.id &&
+                        pkg.compatibilityStatus == ExtensionCompatibilityStatus.EXECUTABLE_KOMA_JSON.name) ||
+                        pkg.compatibilityStatus == ExtensionCompatibilityStatus.COMPANION_IPC_READY.name ||
+                        pkg.compatibilityStatus == ExtensionCompatibilityStatus.NATIVE_EQUIVALENT_AVAILABLE.name
                 ExtensionCompatFilter.VERIFIED_APK -> pkg.localApkPath.isNotBlank() && !pkg.isInstalled
-                ExtensionCompatFilter.ISSUES -> pkg.format != ExtensionFormat.KOMA_JSON_ADAPTER.id ||
+                ExtensionCompatFilter.ISSUES ->
                     !pkg.installError.isNullOrBlank() ||
-                    pkg.compatibilityStatus == ExtensionCompatibilityStatus.SIGNATURE_MISMATCH.name ||
-                    pkg.compatibilityStatus == ExtensionCompatibilityStatus.LIB_VERSION_INCOMPATIBLE.name ||
-                    pkg.compatibilityStatus == ExtensionCompatibilityStatus.UNTRUSTED_REPO.name
+                        pkg.compatibilityStatus == ExtensionCompatibilityStatus.MALFORMED_APK.name ||
+                        pkg.compatibilityStatus == ExtensionCompatibilityStatus.SIGNATURE_MISMATCH.name ||
+                        pkg.compatibilityStatus == ExtensionCompatibilityStatus.LIB_VERSION_INCOMPATIBLE.name ||
+                        pkg.compatibilityStatus == ExtensionCompatibilityStatus.DIFFERENT_ARCHITECTURE.name ||
+                        pkg.compatibilityStatus == ExtensionCompatibilityStatus.UNTRUSTED_REPO.name ||
+                        (pkg.format != ExtensionFormat.KOMA_JSON_ADAPTER.id &&
+                            pkg.format != ExtensionFormat.COMPANION_IPC_EXTENSION.id)
             }
             fromEnabledRepo && matchesQuery && matchesLang && matchesRepo && matchesSubTab && matchesCompat
         }.let { list ->
@@ -293,6 +299,24 @@ class SourcesViewModel(
 
     init {
         checkSourceAvailability()
+        syncCompanionApps()
+    }
+
+    fun syncCompanionApps(showFeedback: Boolean = false) {
+        viewModelScope.launch {
+            val count = runCatching { extRepo.syncInstalledCompanionApps() }.getOrDefault(0)
+            if (showFeedback) {
+                localUiState.update {
+                    it.copy(
+                        statusMsg = if (count > 0) {
+                            "Detected $count installed Companion IPC update(s) on device."
+                        } else {
+                            "Scanned device for Companion IPC apps (`com.koma.extension.IPC_PROVIDER`)."
+                        }
+                    )
+                }
+            }
+        }
     }
 
     fun checkSourceAvailability() {
@@ -411,6 +435,7 @@ class SourcesViewModel(
         viewModelScope.launch {
             localUiState.update { it.copy(isRefreshingRepos = true, errorMsg = null, statusMsg = null) }
             val report = extRepo.refreshAllEnabledRepos(onlyFailed)
+            runCatching { extRepo.syncInstalledCompanionApps() }
             localUiState.update {
                 if (report.totalAttempted == 0) {
                     it.copy(isRefreshingRepos = false, statusMsg = "No matching enabled repositories to refresh.")
@@ -476,25 +501,41 @@ class SourcesViewModel(
 
     fun installOrUpdateExtension(pkg: ExtensionPackageEntity) {
         viewModelScope.launch {
-            if (pkg.format == ExtensionFormat.KOMA_JSON_ADAPTER.id) {
-                val res = extRepo.installExtension(pkg)
-                localUiState.update {
-                    if (res.isSuccess) {
-                        it.copy(statusMsg = "${pkg.name} v${pkg.latestVersionName} installed & activated.")
-                    } else {
-                        it.copy(errorMsg = res.exceptionOrNull()?.message ?: "Installation blocked.")
+            when (pkg.format) {
+                ExtensionFormat.KOMA_JSON_ADAPTER.id -> {
+                    val res = extRepo.installExtension(pkg)
+                    localUiState.update {
+                        if (res.isSuccess) {
+                            it.copy(statusMsg = "${pkg.name} v${pkg.latestVersionName} installed & activated.")
+                        } else {
+                            it.copy(errorMsg = res.exceptionOrNull()?.message ?: "Installation blocked.")
+                        }
                     }
                 }
-            } else {
-                val res = extRepo.downloadAndVerifyMihonApk(pkg)
-                localUiState.update {
-                    if (res.isSuccess) {
-                        val verifiedPkg = res.getOrNull()
-                        it.copy(
-                            statusMsg = "Downloaded & SHA-256 verified ${pkg.name} APK (${verifiedPkg?.libVersion ?: pkg.libVersion}). Reported as UNSUPPORTED (native DEX APK, not installed/active per Play & security rules)."
-                        )
-                    } else {
-                        it.copy(errorMsg = res.exceptionOrNull()?.message ?: "APK verification failed.")
+                ExtensionFormat.COMPANION_IPC_EXTENSION.id -> {
+                    val cfg = runCatching { org.json.JSONObject(pkg.adapterJson) }.getOrNull()
+                    val authority = cfg?.optString("authority").orEmpty()
+                    val targetPkg = cfg?.optString("packageName").orEmpty().ifBlank { pkg.pkgId }
+                    val res = extRepo.activateCompanionIpc(pkg, authority, targetPkg)
+                    localUiState.update {
+                        if (res.isSuccess) {
+                            it.copy(statusMsg = "${pkg.name} Companion IPC activated ('$authority').")
+                        } else {
+                            it.copy(errorMsg = res.exceptionOrNull()?.message ?: "Companion IPC activation failed.")
+                        }
+                    }
+                }
+                else -> {
+                    val res = extRepo.downloadAndVerifyMihonApk(pkg)
+                    localUiState.update {
+                        if (res.isSuccess) {
+                            val verifiedPkg = res.getOrNull()
+                            val summary = verifiedPkg?.compatibilityReason?.takeIf { r -> r.isNotBlank() }
+                                ?: "Inspected ${pkg.name} APK (${verifiedPkg?.libVersion ?: pkg.libVersion})."
+                            it.copy(statusMsg = summary)
+                        } else {
+                            it.copy(errorMsg = res.exceptionOrNull()?.message ?: "APK inspection failed.")
+                        }
                     }
                 }
             }

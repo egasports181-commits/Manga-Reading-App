@@ -224,7 +224,9 @@ class ExtensionRepositoryManager(
                     versionName = incoming.versionName,
                     isRepoTrusted = repo.isTrusted && fingerprintMatches,
                     signatureMatch = fingerprintMatches,
-                    explicitLibVersion = incoming.libVersion.takeIf { it.isNotBlank() }
+                    explicitLibVersion = incoming.libVersion.takeIf { it.isNotBlank() },
+                    pkgId = incoming.pkgId,
+                    extensionName = incoming.name
                 )
                 val existing = existingPackagesById[incoming.pkgId]
                 if (existing != null && (existing.isInstalled || existing.localApkPath.isNotBlank())) {

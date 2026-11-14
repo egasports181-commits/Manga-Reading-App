@@ -4,6 +4,7 @@ import android.content.Context
 import com.example.data.local.dao.ExtensionDao
 import com.example.data.local.dao.SourcePreferenceDao
 import com.example.data.preferences.AppPreferencesRepository
+import com.example.domain.model.ExtensionFormat
 import com.example.extension.ExtensionCompatibilityTranslator
 import com.example.extension.ExtensionSourceRegistry
 import com.example.extension.LoadedExtensionDescriptor
@@ -25,20 +26,23 @@ class SourceRegistry(
     val mangaDex = MangaDexSourceAdapter(httpClient, sourcePrefDao)
     val localSaf = LocalSafSourceAdapter(context, prefsRepo)
     val demoSample = DemoSampleSourceAdapter(context)
-    val extensionSourceRegistry = ExtensionSourceRegistry(extensionDao, prefsRepo, httpClient)
+    val extensionSourceRegistry = ExtensionSourceRegistry(extensionDao, prefsRepo, httpClient, context)
 
     val verifiedExtensionDescriptors: Flow<List<LoadedExtensionDescriptor>> =
         extensionSourceRegistry.verifiedExtensionDescriptors
 
     val allConfiguredSources: Flow<List<ConfiguredSourceEntry>> = combine(
         prefsRepo.preferences,
-        extensionDao.observeActiveKomaPackages()
+        extensionDao.observeInstalledEnabledPackages()
     ) { prefs, installedPkgs ->
         buildList {
             add(ConfiguredSourceEntry(mangaDex, mangaDex.id !in prefs.disabledSourceIds))
             add(ConfiguredSourceEntry(localSaf, localSaf.id !in prefs.disabledSourceIds))
-            installedPkgs.forEach { pkg ->
-                ExtensionCompatibilityTranslator.translateToSourceAdapter(pkg, httpClient)
+            installedPkgs.filter {
+                it.format == ExtensionFormat.KOMA_JSON_ADAPTER.id ||
+                    it.format == ExtensionFormat.COMPANION_IPC_EXTENSION.id
+            }.forEach { pkg ->
+                ExtensionCompatibilityTranslator.translateToSourceAdapter(pkg, httpClient, context)
                     .getOrNull()
                     ?.let { adapter ->
                         add(ConfiguredSourceEntry(adapter, adapter.id !in prefs.disabledSourceIds))

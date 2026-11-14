@@ -1,6 +1,17 @@
 package com.example
 
+import android.content.ContentProvider
+import android.content.ContentValues
 import android.content.Context
+import android.content.pm.ApplicationInfo
+import android.content.pm.PackageInfo
+import android.content.pm.ProviderInfo
+import android.content.pm.ResolveInfo
+import android.content.pm.Signature
+import android.database.Cursor
+import android.database.MatrixCursor
+import android.net.Uri
+import android.os.Bundle
 import androidx.room.Room
 import androidx.sqlite.db.SupportSQLiteDatabase
 import androidx.sqlite.db.SupportSQLiteOpenHelper
@@ -9,19 +20,17 @@ import androidx.test.core.app.ApplicationProvider
 import com.example.data.local.db.KomaDatabase
 import com.example.data.local.entity.ChapterEntity
 import com.example.data.local.entity.ExtensionPackageEntity
+import com.example.data.local.entity.ExtensionRepoEntity
 import com.example.data.local.entity.MangaEntity
 import com.example.data.preferences.AppPreferencesRepository
+import com.example.data.repository.ExtensionRepository
 import com.example.data.repository.MangaRepository
+import com.example.domain.model.ApkIncompatibilityCategory
 import com.example.domain.model.ExtensionCompatibilityStatus
 import com.example.domain.model.ExtensionFormat
 import com.example.domain.model.ExtensionLifecycleState
 import com.example.domain.model.TapZoneLayout
-import com.example.extension.BuiltInRepositories
-import com.example.extension.ExtensionCompatibilityResolver
-import com.example.extension.ExtensionCompatibilityTranslator
-import com.example.extension.ExtensionIndexParser
-import com.example.extension.ExtensionRepositoryManager
-import com.example.extension.KomaManifestValidator
+import com.example.extension.*
 import com.example.network.DnsMode
 import com.example.network.KomaDns
 import com.example.network.KomaTlsProvider
@@ -32,6 +41,7 @@ import com.example.source.MangaDexSourceAdapter
 import com.example.source.SourceRegistry
 import com.example.ui.screens.reader.TapZoneAction
 import com.example.ui.screens.reader.resolveReaderTapAction
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
@@ -42,19 +52,26 @@ import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.io.IOException
 import java.net.ConnectException
 import java.net.InetAddress
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
+import java.security.MessageDigest
 import java.security.cert.CertPathValidatorException
 import java.security.cert.CertificateException
 import java.security.cert.CertificateExpiredException
 import java.security.cert.CertificateNotYetValidException
+import java.util.zip.DeflaterOutputStream
 import java.util.zip.GZIPOutputStream
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLHandshakeException
 import javax.net.ssl.SSLPeerUnverifiedException
@@ -1126,5 +1143,473 @@ class KomaUpgradeRobolectricTest {
         assertEquals(2, pages.size)
         assertEquals("https://mirror.example.org/p1.jpg", pages[0].imageUrl)
         assertEquals("https://mirror.example.org/p2.jpg", pages[1].imageUrl)
+    }
+
+    @Test
+    fun `index parser handles single-field v2 artifacts zlib deflate and rejects plain text or zip payloads`() {
+        // Single-field v2 artifacts submessage (only field 1 apkUrl) + relative "apk/..." path deduplication
+        val singleArtifact = fieldString(1, "apk/tachiyomi-en.singlefield-v1.5.0.apk")
+        val extPayload = ByteArrayOutputStream().apply {
+            write(fieldString(1, "Single Field V2"))
+            write(fieldString(2, "eu.kanade.tachiyomi.extension.en.singlefield"))
+            write(fieldBytes(3, singleArtifact))
+            write(fieldString(4, "1.5"))
+            write(fieldVarint(5, 105000L))
+            write(fieldString(6, "1.5.0"))
+        }.toByteArray()
+        val rootV2 = ByteArrayOutputStream().apply {
+            write(fieldString(1, "Keiyoushi"))
+            write(fieldString(2, "KEI"))
+            write(fieldString(3, "deadbeef"))
+            write(fieldBytes(101, fieldBytes(1, extPayload)))
+        }.toByteArray()
+
+        // Compress with raw zlib DEFLATE (0x78 ...)
+        val zlibOut = ByteArrayOutputStream()
+        DeflaterOutputStream(zlibOut).use { it.write(rootV2) }
+
+        val parsed = ExtensionIndexParser.parseIndexBytes(
+            repoId = 1L,
+            indexUrl = "https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.pb",
+            rawBytes = zlibOut.toByteArray()
+        )
+        assertEquals(1, parsed.packages.size)
+        val pkg = parsed.packages.first()
+        assertEquals("eu.kanade.tachiyomi.extension.en.singlefield", pkg.pkgId)
+        assertEquals(
+            "https://raw.githubusercontent.com/keiyoushi/extensions/repo/apk/tachiyomi-en.singlefield-v1.5.0.apk",
+            pkg.apkUrl
+        )
+
+        // Plain-text HTTP error must NOT enter ProtobufWireReader
+        val textErr = runCatching {
+            ExtensionIndexParser.parseIndexBytes(
+                1L,
+                "https://cdn.example.com/index.pb",
+                "429 Too Many Requests".toByteArray()
+            )
+        }.exceptionOrNull()
+        assertNotNull(textErr)
+        assertTrue(textErr!!.message!!.contains("plain text", ignoreCase = true))
+
+        // ZIP archive returned where index.pb was expected must be rejected cleanly
+        val zipErr = runCatching {
+            ExtensionIndexParser.parseIndexBytes(
+                1L,
+                "https://cdn.example.com/index.pb",
+                byteArrayOf(0x50, 0x4B, 0x03, 0x04, 0x00, 0x00)
+            )
+        }.exceptionOrNull()
+        assertNotNull(zipErr)
+        assertTrue(zipErr!!.message!!.contains("ZIP/APK", ignoreCase = true))
+    }
+
+    private fun writeSyntheticApkZip(
+        destFile: File,
+        includeManifest: Boolean = true,
+        includeDex: Boolean = true,
+        includeCert: Boolean = false
+    ) {
+        ZipOutputStream(destFile.outputStream()).use { zos ->
+            if (includeManifest) {
+                zos.putNextEntry(ZipEntry("AndroidManifest.xml"))
+                zos.write(byteArrayOf(0x03, 0x00, 0x08, 0x00))
+                zos.closeEntry()
+            }
+            if (includeDex) {
+                zos.putNextEntry(ZipEntry("classes.dex"))
+                zos.write("dex\n035\u0000".toByteArray())
+                zos.closeEntry()
+            }
+            if (includeCert) {
+                zos.putNextEntry(ZipEntry("META-INF/CERT.RSA"))
+                zos.write(byteArrayOf(0x30, 0x82.toByte()))
+                zos.closeEntry()
+            }
+        }
+    }
+
+    @Test
+    fun `apk classification separates Category A B C D and security fingerprint checks cleanly`() = runTest {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val tempDir = File(context.cacheDir, "apk_audit_test_${System.currentTimeMillis()}").apply { mkdirs() }
+
+        // 1) Category B: Corrupt/non-ZIP file
+        val corruptApk = File(tempDir, "corrupt.apk").apply { writeText("<html>502 Bad Gateway</html>") }
+        val corruptAudit = ExtensionSecurityManager.inspectApkStructural(context, corruptApk, "eu.kanade.tachiyomi.extension.en.test")
+        assertFalse(corruptAudit.isValidZipArchive)
+        val corruptEval = ExtensionCompatibilityResolver.evaluateApkArchive(
+            pkg = ExtensionPackageEntity(
+                pkgId = "eu.kanade.tachiyomi.extension.en.test",
+                name = "Corrupt",
+                versionName = "1.4.0",
+                versionCode = 1
+            ),
+            inspection = corruptAudit,
+            isRepoTrusted = true,
+            expectedFingerprint = ""
+        )
+        assertEquals(ExtensionCompatibilityStatus.MALFORMED_APK, corruptEval.status)
+        assertEquals(ApkIncompatibilityCategory.MALFORMED_OR_INCOMPLETE, corruptEval.category)
+
+        // 2) Category B: Fingerprint mismatch when signature is blank must FAIL (fixes old silent-pass security hole)
+        assertFalse(ExtensionSecurityManager.fingerprintsMatch("9add655a78e96c4e", ""))
+        val validZipNoPm = ApkInspectionResult(
+            packageName = "eu.kanade.tachiyomi.extension.en.good",
+            versionCode = 10L,
+            versionName = "1.4.2",
+            extensionClass = "eu.kanade.tachiyomi.extension.en.good.GoodSource",
+            isNsfw = false,
+            hasReadme = false,
+            signatureSha256 = "",
+            fileSha256 = "0123456789abcdef0123456789abcdef",
+            isValidZipArchive = true,
+            hasAndroidManifestEntry = true,
+            hasDexBytecode = true,
+            hasSigningBlockOrCert = false,
+            packageManagerParsed = true,
+            structuralIssues = emptyList()
+        )
+        val missingSigEval = ExtensionCompatibilityResolver.evaluateApkArchive(
+            pkg = ExtensionPackageEntity(
+                pkgId = "eu.kanade.tachiyomi.extension.en.good",
+                name = "Good",
+                versionName = "1.4.2",
+                versionCode = 10
+            ),
+            inspection = validZipNoPm,
+            isRepoTrusted = true,
+            expectedFingerprint = "9add655a78e96c4e"
+        )
+        assertEquals(ExtensionCompatibilityStatus.SIGNATURE_MISMATCH, missingSigEval.status)
+        assertEquals(ApkIncompatibilityCategory.MALFORMED_OR_INCOMPLETE, missingSigEval.category)
+
+        // 3) Category D: Valid signed Android APK missing Mihon extension markers
+        val nonMihonInspection = ApkInspectionResult(
+            packageName = "com.example.randomapp",
+            versionCode = 1L,
+            versionName = "1.4.0",
+            extensionClass = "",
+            isNsfw = false,
+            hasReadme = false,
+            signatureSha256 = "9add655a78e96c4ec7a53ef89dccb557cb5d767489fac5e785d671a5a75d4da2",
+            fileSha256 = "abcdef01",
+            isValidZipArchive = true,
+            hasAndroidManifestEntry = true,
+            hasDexBytecode = true,
+            hasSigningBlockOrCert = true,
+            packageManagerParsed = true,
+            structuralIssues = emptyList()
+        )
+        val catDEval = ExtensionCompatibilityResolver.evaluateApkArchive(
+            pkg = ExtensionPackageEntity(
+                pkgId = "com.example.randomapp",
+                name = "RandomApp",
+                versionName = "1.4.0",
+                versionCode = 1
+            ),
+            inspection = nonMihonInspection,
+            isRepoTrusted = true,
+            expectedFingerprint = "9add655a78e96c4ec7a53ef89dccb557cb5d767489fac5e785d671a5a75d4da2"
+        )
+        assertEquals(ExtensionCompatibilityStatus.DIFFERENT_ARCHITECTURE, catDEval.status)
+        assertEquals(ApkIncompatibilityCategory.DIFFERENT_ARCHITECTURE, catDEval.category)
+
+        // 4) Category A: Valid Mihon APK targeting unsupported extensions-lib 1.7
+        val catAInspection = nonMihonInspection.copy(
+            packageName = "eu.kanade.tachiyomi.extension.en.future",
+            versionName = "1.7.0",
+            extensionClass = ".FutureSource",
+            hasTachiyomiFeature = true
+        )
+        val catAEval = ExtensionCompatibilityResolver.evaluateApkArchive(
+            pkg = ExtensionPackageEntity(
+                pkgId = "eu.kanade.tachiyomi.extension.en.future",
+                name = "Future",
+                versionName = "1.7.0",
+                versionCode = 1
+            ),
+            inspection = catAInspection,
+            isRepoTrusted = true,
+            expectedFingerprint = "9add655a78e96c4ec7a53ef89dccb557cb5d767489fac5e785d671a5a75d4da2"
+        )
+        assertEquals(ExtensionCompatibilityStatus.LIB_VERSION_INCOMPATIBLE, catAEval.status)
+        assertEquals(ApkIncompatibilityCategory.API_VERSION_INCOMPATIBLE, catAEval.category)
+
+        // 5) Category C: Valid signed Mihon APK targeting supported metadata range (v1.4) + DEX bytecode
+        val catCInspection = catAInspection.copy(versionName = "1.4.12")
+        val catCEval = ExtensionCompatibilityResolver.evaluateApkArchive(
+            pkg = ExtensionPackageEntity(
+                pkgId = "eu.kanade.tachiyomi.extension.en.validmihon",
+                name = "ValidMihon",
+                versionName = "1.4.12",
+                versionCode = 12
+            ),
+            inspection = catCInspection,
+            isRepoTrusted = true,
+            expectedFingerprint = "9add655a78e96c4ec7a53ef89dccb557cb5d767489fac5e785d671a5a75d4da2"
+        )
+        assertEquals(ExtensionCompatibilityStatus.VERIFIED_MIHON_RUNTIME_RESTRICTED, catCEval.status)
+        assertEquals(ApkIncompatibilityCategory.MIHON_DEX_POLICY_RESTRICTED, catCEval.category)
+        assertFalse(catCEval.canExecuteInKoma)
+
+        // 6) End-to-end PackageManager download rejection on malformed APK body
+        val db = Room.inMemoryDatabaseBuilder(context, KomaDatabase::class.java)
+            .allowMainThreadQueries()
+            .build()
+        val mockHttp = OkHttpClient.Builder()
+            .addInterceptor { chain ->
+                Response.Builder()
+                    .request(chain.request())
+                    .protocol(Protocol.HTTP_1_1)
+                    .code(200)
+                    .message("OK")
+                    .body("NOT A VALID APK".toResponseBody("text/plain".toMediaType()))
+                    .build()
+            }
+            .build()
+        val extRepo = ExtensionRepository(db.extensionDao(), mockHttp, context)
+        val repoId = db.extensionDao().upsertRepo(
+            ExtensionRepoEntity(
+                name = "TestRepo",
+                indexUrl = "https://repo.example/index.pb",
+                signingKeyFingerprint = "9add655a",
+                isTrusted = true
+            )
+        )
+        val pkg = ExtensionPackageEntity(
+            pkgId = "eu.kanade.tachiyomi.extension.en.bad",
+            repoId = repoId,
+            name = "BadApk",
+            versionName = "1.4.0",
+            versionCode = 1,
+            apkUrl = "https://repo.example/apk/bad.apk",
+            format = ExtensionFormat.MIHON_PROTOBUF_INDEX.id
+        )
+        db.extensionDao().upsertPackage(pkg)
+        val dlResult = extRepo.downloadAndVerifyMihonApk(pkg)
+        assertTrue(dlResult.isFailure)
+        val saved = db.extensionDao().getPackage(pkg.pkgId)!!
+        assertEquals(ExtensionCompatibilityStatus.MALFORMED_APK.name, saved.compatibilityStatus)
+        assertFalse(saved.isInstalled)
+        assertEquals("", saved.signatureHash)
+
+        db.close()
+        tempDir.deleteRecursively()
+    }
+
+    @Test
+    fun `option A companion IPC discovers activates and executes full manga workflow without DEX loading`() = runTest {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val authority = "com.example.companion.ipc.test"
+        val companionPkg = "com.koma.companion.testsource"
+        val sigBytes = "test-companion-cert".toByteArray()
+        val expectedFp = MessageDigest.getInstance("SHA-256").digest(sigBytes).joinToString("") { "%02x".format(it) }
+
+        // Register real Robolectric ContentProvider responding to call() IPC requests
+        val fakeProvider = object : ContentProvider() {
+            override fun onCreate(): Boolean = true
+            override fun query(uri: Uri, p: Array<out String>?, s: String?, sa: Array<out String>?, so: String?): Cursor? = null
+            override fun getType(uri: Uri): String? = null
+            override fun insert(uri: Uri, values: ContentValues?): Uri? = null
+            override fun delete(uri: Uri, selection: String?, selectionArgs: Array<out String>?): Int = 0
+            override fun update(uri: Uri, values: ContentValues?, selection: String?, selectionArgs: Array<out String>?): Int = 0
+            override fun call(method: String, arg: String?, extras: Bundle?): Bundle {
+                val json = when (method) {
+                    "status" -> """{"online":true}"""
+                    "popular", "search" -> """{"items":[{"mangaKey":"ipc-1","title":"Companion Saga","coverUrl":"https://cdn.example/c.jpg","author":"IPC Author","status":"ongoing"}],"hasNextPage":false}"""
+                    "details" -> """{"mangaKey":"ipc-1","title":"Companion Saga","author":"IPC Author","description":"Served across Binder IPC","status":"ongoing","genres":["Action","Sci-Fi"]}"""
+                    "chapters" -> """{"chapters":[{"chapterKey":"ipc-ch-1","name":"Chapter 1","chapterNumber":1.0}]}"""
+                    "pages" -> """{"pages":[{"index":0,"url":"https://cdn.example/p1.webp","headers":{"Referer":"https://companion.example/"}}]}"""
+                    else -> """{"error":"unknown method"}"""
+                }
+                return Bundle().apply { putString("payload", json) }
+            }
+        }
+        val providerInfo = ProviderInfo().apply {
+            this.authority = authority
+            this.packageName = companionPkg
+            this.name = "FakeIpcProvider"
+            this.metaData = Bundle().apply {
+                putString("koma.extension.ipc.authority", authority)
+            }
+        }
+        fakeProvider.attachInfo(context, providerInfo)
+        org.robolectric.shadows.ShadowContentResolver.registerProviderInternal(authority, fakeProvider)
+
+        val shadowPm = shadowOf(context.packageManager)
+        val companionAppInfo = ApplicationInfo().apply {
+            packageName = companionPkg
+            metaData = Bundle().apply {
+                putString("koma.extension.ipc.authority", authority)
+            }
+        }
+        val registeredProvider = ProviderInfo(providerInfo).apply {
+            applicationInfo = companionAppInfo
+        }
+        @Suppress("DEPRECATION")
+        val pkgInfo = PackageInfo().apply {
+            packageName = companionPkg
+            versionName = "1.0.0"
+            versionCode = 1
+            applicationInfo = companionAppInfo
+            providers = arrayOf(registeredProvider)
+            signatures = arrayOf(Signature(sigBytes))
+        }
+        shadowPm.installPackage(pkgInfo)
+        val resolveInfo = ResolveInfo().apply {
+            this.providerInfo = registeredProvider
+            this.activityInfo = android.content.pm.ActivityInfo().apply {
+                packageName = companionPkg
+                name = "com.koma.companion.testsource.CompanionActivity"
+                applicationInfo = companionAppInfo
+            }
+        }
+        shadowPm.addResolveInfoForIntent(android.content.Intent(ExtensionSecurityManager.ACTION_KOMA_IPC_PROVIDER), resolveInfo)
+
+        val discovered = ExtensionSecurityManager.discoverInstalledCompanionPackages(
+            context,
+            mapOf(companionPkg to expectedFp)
+        )
+        assertEquals(1, discovered.size)
+        assertEquals(authority, discovered.first().ipcAuthority)
+        assertTrue(discovered.first().matchesExpectedFingerprint)
+
+        val db = Room.inMemoryDatabaseBuilder(context, KomaDatabase::class.java).allowMainThreadQueries().build()
+        val extRepo = ExtensionRepository(db.extensionDao(), OkHttpClient(), context)
+        val repoId = db.extensionDao().upsertRepo(
+            ExtensionRepoEntity(
+                name = "CompanionRepo",
+                indexUrl = "https://companion.example/repo.json",
+                signingKeyFingerprint = expectedFp,
+                isTrusted = true
+            )
+        )
+        val pkg = ExtensionPackageEntity(
+            pkgId = companionPkg,
+            repoId = repoId,
+            name = "Companion Source",
+            versionName = "1.0.0",
+            versionCode = 1,
+            language = "en",
+            format = ExtensionFormat.MIHON_JSON_INDEX.id
+        )
+        db.extensionDao().upsertPackage(pkg)
+
+        // Auto-sync detects IPC provider cleanly & marks COMPANION_IPC_READY
+        val synced = extRepo.syncInstalledCompanionApps()
+        assertEquals(1, synced)
+        val readyPkg = db.extensionDao().getPackage(companionPkg)!!
+        assertEquals(ExtensionFormat.COMPANION_IPC_EXTENSION.id, readyPkg.format)
+        assertEquals(ExtensionCompatibilityStatus.COMPANION_IPC_READY.name, readyPkg.compatibilityStatus)
+
+        // Activate IPC extension and register inside SourceRegistry
+        assertTrue(extRepo.activateCompanionIpc(readyPkg, authority, companionPkg).isSuccess)
+        val prefsRepo = AppPreferencesRepository(context)
+        val registry = SourceRegistry(context, OkHttpClient(), prefsRepo, db.extensionDao(), db.sourcePreferenceDao())
+        val activeAdapter = registry.getSourceById(companionPkg)
+        assertNotNull(activeAdapter)
+        assertTrue(activeAdapter!!.isAvailable())
+        val searchRes = activeAdapter.search("Companion", 1)
+        assertEquals("Companion Saga", searchRes.items.first().title)
+        assertEquals("Served across Binder IPC", activeAdapter.getMangaDetails("ipc-1").description)
+        assertEquals("ipc-ch-1", activeAdapter.getChapters("ipc-1").first().chapterKey)
+        val pages = activeAdapter.getChapterPages("ipc-ch-1")
+        assertEquals("https://companion.example/", pages.first().headers["Referer"])
+
+        db.close()
+    }
+
+    @Test
+    fun `option B apiVersion bounds offset headers and option C native mangadex mapping behave cleanly`() = runTest {
+        // Option B: apiVersion > 1 rejected cleanly
+        val unsupportedApi = KomaManifestValidator.validateJsonString(
+            """{"apiVersion":2,"baseUrl":"https://api.example.com","popularEndpoint":"/popular"}"""
+        )
+        assertFalse(unsupportedApi.isValid)
+        assertTrue(unsupportedApi.errorReason!!.contains("api", ignoreCase = true))
+
+        // Option B: {offset}/{limit} & pageHeaders propagated to SourcePage
+        val komaPkg = ExtensionPackageEntity(
+            pkgId = "koma.offset.test",
+            name = "Offset Source",
+            versionName = "1.0.0",
+            versionCode = 1,
+            language = "en",
+            format = ExtensionFormat.KOMA_JSON_ADAPTER.id,
+            adapterJson = """
+                {
+                  "apiVersion": 1,
+                  "baseUrl": "https://cdn.example.org",
+                  "pageSize": 10,
+                  "popularEndpoint": "/manga?offset={offset}&limit={limit}",
+                  "pagesEndpoint": "/pages/{chapterId}",
+                  "itemsPath": "results",
+                  "hasNextPath": "hasMore",
+                  "pagesPath": "images",
+                  "pageUrlField": "src",
+                  "pageHeaders": {"Referer": "https://cdn.example.org/reader"}
+                }
+            """.trimIndent(),
+            compatibilityStatus = ExtensionCompatibilityStatus.EXECUTABLE_KOMA_JSON.name,
+            isInstalled = true,
+            isEnabled = true
+        )
+        var capturedUrl = ""
+        val mockHttp = OkHttpClient.Builder()
+            .addInterceptor { chain ->
+                capturedUrl = chain.request().url.toString()
+                val body = if (capturedUrl.contains("/pages/")) {
+                    """{"images":[{"src":"https://cdn.example.org/img1.png"}]}"""
+                } else {
+                    """{"hasMore":false,"results":[{"id":"a1","title":"Paged Item"}]}"""
+                }
+                Response.Builder()
+                    .request(chain.request())
+                    .protocol(Protocol.HTTP_1_1)
+                    .code(200)
+                    .message("OK")
+                    .body(body.toResponseBody("application/json".toMediaType()))
+                    .build()
+            }
+            .build()
+        val adapter = ExtensionCompatibilityTranslator.translateToSourceAdapter(komaPkg, mockHttp).getOrThrow()
+        val page2 = adapter.getPopular(page = 3)
+        assertEquals("https://cdn.example.org/manga?offset=20&limit=10", capturedUrl)
+        assertFalse(page2.hasNextPage)
+        assertEquals("Paged Item", page2.items.first().title)
+        val pages = adapter.getChapterPages("ch99")
+        assertEquals("https://cdn.example.org/reader", pages.first().headers["Referer"])
+
+        // Option C: Keiyoushi MangaDex maps to built-in native mangadex while reporting DEX restriction honestly
+        val mdEval = ExtensionCompatibilityResolver.evaluateMetadata(
+            format = ExtensionFormat.MIHON_PROTOBUF_INDEX,
+            versionName = "1.4.205",
+            isRepoTrusted = true,
+            signatureMatch = true,
+            pkgId = "eu.kanade.tachiyomi.extension.all.mangadex",
+            extensionName = "MangaDex"
+        )
+        assertEquals(ExtensionCompatibilityStatus.NATIVE_EQUIVALENT_AVAILABLE, mdEval.status)
+        assertEquals("mangadex", mdEval.nativeEquivalentSourceId)
+        assertFalse(mdEval.canExecuteInKoma)
+
+        val mdEntity = ExtensionPackageEntity(
+            pkgId = "eu.kanade.tachiyomi.extension.all.mangadex",
+            repoId = 1L,
+            name = "MangaDex",
+            versionName = "1.4.205",
+            versionCode = 205,
+            libVersion = "1.4",
+            format = ExtensionFormat.MIHON_PROTOBUF_INDEX.id,
+            compatibilityStatus = mdEval.status.name
+        )
+        val mdLifecycle = ExtensionCompatibilityResolver.resolveLifecycle(mdEntity)
+        assertEquals("mangadex", mdLifecycle.nativeEquivalentSourceId)
+        assertFalse(mdLifecycle.isCompatible)
+        assertNotNull(mdLifecycle.matrix)
+        assertTrue(mdLifecycle.matrix!!.repositoryImported)
+        assertTrue(mdLifecycle.matrix!!.metadataRecognized)
+        assertFalse(mdLifecycle.matrix!!.extensionActivated)
     }
 }

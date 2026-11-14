@@ -20,6 +20,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -271,7 +272,8 @@ fun SourcesScreen(
                     onUpdateAll = viewModel::updateAllExtensions,
                     onToggleEnabled = viewModel::setExtensionEnabled,
                     onUninstall = viewModel::uninstallExtension,
-                    onInspect = { inspectPackage = it }
+                    onInspect = { inspectPackage = it },
+                    onOpenNativeSource = onOpenSource
                 )
             }
         }
@@ -328,6 +330,10 @@ fun SourcesScreen(
             onInstallOrVerify = {
                 viewModel.installOrUpdateExtension(pkg)
                 inspectPackage = null
+            },
+            onOpenNativeSource = { nativeSourceId ->
+                inspectPackage = null
+                onOpenSource(nativeSourceId)
             },
             onOpenApkInBrowser = { url ->
                 runCatching {
@@ -852,7 +858,8 @@ private fun ExtensionsManagerTab(
     onUpdateAll: () -> Unit,
     onToggleEnabled: (String, Boolean) -> Unit,
     onUninstall: (String) -> Unit,
-    onInspect: (ExtensionPackageEntity) -> Unit
+    onInspect: (ExtensionPackageEntity) -> Unit,
+    onOpenNativeSource: (String) -> Unit
 ) {
     val updatesCount = state.packages.count { (it.isInstalled || it.localApkPath.isNotBlank()) && it.hasUpdate }
     val failedRepoCount = state.repos.count { it.isEnabled && !it.lastError.isNullOrBlank() }
@@ -1224,6 +1231,7 @@ private fun ExtensionsManagerTab(
             } else {
                 items(state.packages, key = { it.pkgId }) { pkg ->
                     val isKoma = pkg.format == ExtensionFormat.KOMA_JSON_ADAPTER.id
+                    val isIpc = pkg.format == ExtensionFormat.COMPANION_IPC_EXTENSION.id
                     val isApkVerified = pkg.localApkPath.isNotBlank()
                     val downloadFraction = state.extDownloadProgress[pkg.pkgId]
                     val lifecycle = ExtensionCompatibilityResolver.resolveLifecycle(pkg)
@@ -1286,20 +1294,37 @@ private fun ExtensionsManagerTab(
                                     ExtensionLifecycleState.COMPATIBLE -> StatusCompleted
                                     ExtensionLifecycleState.VERIFIED,
                                     ExtensionLifecycleState.DOWNLOADED -> StatusHiatus
-                                    ExtensionLifecycleState.UNSUPPORTED -> StatusError
+                                    ExtensionLifecycleState.UNSUPPORTED -> when {
+                                        lifecycle.nativeEquivalentSourceId != null -> StatusCompleted
+                                        pkg.compatibilityStatus == ExtensionCompatibilityStatus.VERIFIED_MIHON_RUNTIME_RESTRICTED.name -> StatusHiatus
+                                        else -> StatusError
+                                    }
+                                }
+                                val badgeLabel = when (lifecycle.primaryState) {
+                                    ExtensionLifecycleState.ACTIVE -> if (isIpc) "Active IPC" else "Active"
+                                    ExtensionLifecycleState.COMPATIBLE -> if (isIpc) "IPC Ready" else "Compatible"
+                                    ExtensionLifecycleState.VERIFIED -> if (lifecycle.nativeEquivalentSourceId != null) {
+                                        "Verified • Native Alt"
+                                    } else {
+                                        "Cat C • Verified APK"
+                                    }
+                                    ExtensionLifecycleState.DOWNLOADED -> "Inspected"
+                                    ExtensionLifecycleState.UNSUPPORTED -> when (pkg.compatibilityStatus) {
+                                        ExtensionCompatibilityStatus.MALFORMED_APK.name -> "Cat B: Malformed APK"
+                                        ExtensionCompatibilityStatus.SIGNATURE_MISMATCH.name -> "Cat B: Sig Mismatch"
+                                        ExtensionCompatibilityStatus.LIB_VERSION_INCOMPATIBLE.name -> "Cat A: API Mismatch"
+                                        ExtensionCompatibilityStatus.DIFFERENT_ARCHITECTURE.name -> "Cat D: Non-Mihon APK"
+                                        ExtensionCompatibilityStatus.UNTRUSTED_REPO.name -> "Untrusted Repo"
+                                        ExtensionCompatibilityStatus.NATIVE_EQUIVALENT_AVAILABLE.name -> "Cat C + Native Alt"
+                                        else -> "Cat C: Mihon DEX"
+                                    }
                                 }
                                 Surface(
                                     color = badgeColor.copy(alpha = 0.14f),
                                     shape = CircleShape
                                 ) {
                                     Text(
-                                        text = when (lifecycle.primaryState) {
-                                            ExtensionLifecycleState.ACTIVE -> "Active"
-                                            ExtensionLifecycleState.COMPATIBLE -> "Compatible"
-                                            ExtensionLifecycleState.VERIFIED -> "Verified • Unsupported"
-                                            ExtensionLifecycleState.DOWNLOADED -> "Downloaded"
-                                            ExtensionLifecycleState.UNSUPPORTED -> "Unsupported APK"
-                                        },
+                                        text = badgeLabel,
                                         style = MaterialTheme.typography.labelSmall,
                                         color = badgeColor,
                                         fontWeight = FontWeight.Medium,
@@ -1362,7 +1387,17 @@ private fun ExtensionsManagerTab(
                                     )
                                     Spacer(Modifier.width(8.dp))
                                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                        if (isApkVerified) {
+                                        val nativeEqId = lifecycle.nativeEquivalentSourceId
+                                        if (isIpc && lifecycle.isCompatible) {
+                                            Button(onClick = { onInstallOrUpdate(pkg) }, shape = CircleShape) {
+                                                Text("Activate IPC")
+                                            }
+                                        } else if (isApkVerified) {
+                                            if (nativeEqId != null) {
+                                                Button(onClick = { onOpenNativeSource(nativeEqId) }, shape = CircleShape) {
+                                                    Text("Open Native")
+                                                }
+                                            }
                                             OutlinedButton(onClick = { onUninstall(pkg.pkgId) }, shape = CircleShape) {
                                                 Text("Remove APK")
                                             }
@@ -1371,12 +1406,17 @@ private fun ExtensionsManagerTab(
                                                 Text("Install")
                                             }
                                         } else if (!isKoma) {
+                                            if (nativeEqId != null) {
+                                                Button(onClick = { onOpenNativeSource(nativeEqId) }, shape = CircleShape) {
+                                                    Text("Open Native")
+                                                }
+                                            }
                                             FilledTonalButton(
                                                 onClick = { onInstallOrUpdate(pkg) },
                                                 enabled = pkg.apkUrl.startsWith("https://") && downloadFraction == null,
                                                 shape = CircleShape
                                             ) {
-                                                Text("Verify APK")
+                                                Text("Inspect APK")
                                             }
                                         }
                                     }
@@ -1520,16 +1560,22 @@ private fun ExtensionInspectDialog(
     pkg: ExtensionPackageEntity,
     onDismiss: () -> Unit,
     onInstallOrVerify: () -> Unit,
+    onOpenNativeSource: (String) -> Unit,
     onOpenApkInBrowser: (String) -> Unit
 ) {
     val isKoma = pkg.format == ExtensionFormat.KOMA_JSON_ADAPTER.id
+    val isIpc = pkg.format == ExtensionFormat.COMPANION_IPC_EXTENSION.id
     val lifecycle = ExtensionCompatibilityResolver.resolveLifecycle(pkg)
+    val matrix = lifecycle.matrix
     AlertDialog(
         onDismissRequest = onDismiss,
         shape = RoundedCornerShape(24.dp),
         title = { Text(pkg.name) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
                 Text("Package ID: ${pkg.pkgId}", style = MaterialTheme.typography.bodySmall)
                 Text("Format: ${ExtensionFormat.fromId(pkg.format).label}", style = MaterialTheme.typography.bodySmall)
                 Text("Version: ${pkg.latestVersionName} (code ${pkg.latestVersionCode})", style = MaterialTheme.typography.bodySmall)
@@ -1537,20 +1583,68 @@ private fun ExtensionInspectDialog(
                     Text("Target Lib Version: ${pkg.libVersion}", style = MaterialTheme.typography.bodySmall)
                 }
                 Text(
-                    "Lifecycle: ${lifecycle.badges.joinToString(" • ")}",
+                    "Classification: ${lifecycle.incompatibilityCategory.label}",
                     style = MaterialTheme.typography.labelMedium,
                     color = if (lifecycle.isCompatible) StatusOngoing else StatusHiatus
                 )
-                Text(
-                    "States — Downloaded: ${lifecycle.isDownloaded} • Verified: ${lifecycle.isVerified} • Compatible: ${lifecycle.isCompatible} • Active: ${lifecycle.isActive}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                if (matrix != null) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(3.dp)
+                        ) {
+                            Text("Compatibility Matrix", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                            Text(
+                                "1. Repository Imported: ${if (matrix.repositoryImported) "YES" else "NO"}",
+                                style = MaterialTheme.typography.labelSmall
+                            )
+                            Text(
+                                "2. Metadata Recognized: ${if (matrix.metadataRecognized) "YES" else "NO"}",
+                                style = MaterialTheme.typography.labelSmall
+                            )
+                            Text(
+                                "3. APK Inspected: ${if (matrix.apkInspected) "YES" else "PENDING"}",
+                                style = MaterialTheme.typography.labelSmall
+                            )
+                            Text(
+                                "4. Signature Verified: ${if (matrix.apkVerified) "YES" else "NO"}",
+                                style = MaterialTheme.typography.labelSmall
+                            )
+                            Text(
+                                "5. Extension Compatible: ${if (matrix.extensionCompatible) "YES" else "NO (${matrix.capabilityLevel})"}",
+                                style = MaterialTheme.typography.labelSmall
+                            )
+                            Text(
+                                "6. Extension Activated: ${if (matrix.extensionActivated) "YES" else "NO"}",
+                                style = MaterialTheme.typography.labelSmall
+                            )
+                            Text(
+                                "Status: ${matrix.sourceFunctionalStatus}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
                 if (pkg.compatibilityReason.isNotBlank()) {
                     Text(pkg.compatibilityReason, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 if (pkg.installedSignatureSha256.isNotBlank()) {
                     Text("APK Cert SHA-256: ${pkg.installedSignatureSha256.take(24)}…", style = MaterialTheme.typography.labelSmall)
+                }
+                lifecycle.nativeEquivalentSourceId?.let { nativeId ->
+                    FilledTonalButton(
+                        onClick = { onOpenNativeSource(nativeId) },
+                        shape = CircleShape,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.Public, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Open Built-in Native ${nativeId.replaceFirstChar { it.uppercase() }}")
+                    }
                 }
                 if (pkg.apkUrl.startsWith("https://")) {
                     TextButton(
@@ -1565,10 +1659,12 @@ private fun ExtensionInspectDialog(
             }
         },
         confirmButton = {
-            if (isKoma && lifecycle.isCompatible && !pkg.isInstalled) {
+            if (isIpc && lifecycle.isCompatible && !pkg.isInstalled) {
+                Button(onClick = onInstallOrVerify, shape = CircleShape) { Text("Activate IPC") }
+            } else if (isKoma && lifecycle.isCompatible && !pkg.isInstalled) {
                 Button(onClick = onInstallOrVerify, shape = CircleShape) { Text("Install") }
-            } else if (!isKoma && pkg.apkUrl.startsWith("https://")) {
-                FilledTonalButton(onClick = onInstallOrVerify, shape = CircleShape) { Text("Download & Verify SHA-256") }
+            } else if (!isKoma && !isIpc && pkg.apkUrl.startsWith("https://")) {
+                FilledTonalButton(onClick = onInstallOrVerify, shape = CircleShape) { Text("Download & Inspect APK") }
             }
         },
         dismissButton = {

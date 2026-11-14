@@ -4,6 +4,7 @@ import android.content.Context
 import com.example.data.local.dao.ExtensionDao
 import com.example.data.local.entity.ExtensionInstallHistoryEntity
 import com.example.data.local.entity.ExtensionPackageEntity
+import com.example.domain.model.ApkIncompatibilityCategory
 import com.example.domain.model.ExtensionCompatibilityStatus
 import com.example.domain.model.ExtensionFormat
 import com.example.network.NetworkErrorFormatter
@@ -16,13 +17,16 @@ import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
 
 /**
- * Manages extension installation, APK verification downloads, updates,
- * cached APK storage, and audit history.
+ * Manages extension installation, APK structural/certificate inspection, Option A Companion IPC
+ * activation/discovery, cached APK storage, and audit history.
+ *
+ * Strictly forbids in-process DEX execution (`DexClassLoader`) and silent APK installation.
  */
 class ExtensionPackageManager(
     private val context: Context?,
@@ -34,7 +38,7 @@ class ExtensionPackageManager(
 
     suspend fun installKomaAdapter(pkg: ExtensionPackageEntity): Result<Unit> {
         if (pkg.format != ExtensionFormat.KOMA_JSON_ADAPTER.id) {
-            val msg = "Native Mihon/Tachiyomi APKs cannot execute DEX code inside Koma's sandboxed runtime. Verify the APK or use a koma_json_v1 manifest instead."
+            val msg = "Native Mihon/Tachiyomi APKs cannot execute DEX code inside Koma's sandboxed runtime. Inspect the APK, use Companion IPC (Option A), or add a koma_json_v1 adapter."
             recordHistory(pkg, "INSTALL", "REJECTED", msg)
             return Result.failure(UnsupportedOperationException(msg))
         }
@@ -59,7 +63,7 @@ class ExtensionPackageManager(
             versionName = pkg.latestVersionName.ifBlank { pkg.versionName },
             hasUpdate = false,
             compatibilityStatus = ExtensionCompatibilityStatus.EXECUTABLE_KOMA_JSON.name,
-            compatibilityReason = "Compatible, installed, and active inside Koma's declarative JSON sandbox (koma_json_v1).",
+            compatibilityReason = "Compatible, installed, and active inside Koma's declarative JSON sandbox (koma_json_v1, API v1).",
             installError = null,
             updatedAt = System.currentTimeMillis()
         )
@@ -69,9 +73,144 @@ class ExtensionPackageManager(
     }
 
     /**
-     * Downloads a Mihon APK over HTTPS into `filesDir/extensions_cache/`, computes SHA-256,
-     * inspects manifest + signing certificate against repo fingerprint, and persists verified audit metadata.
-     * NEVER sets `isInstalled = true` and NEVER loads or executes DEX/APK bytecode.
+     * Option A: Activates a verified out-of-process Companion IPC extension (`koma_ipc_v1`).
+     * Communicates solely via Android ContentResolver IPC boundaries; zero DEX loading.
+     */
+    suspend fun activateCompanionIpc(
+        pkg: ExtensionPackageEntity,
+        authority: String,
+        targetPackageName: String = pkg.pkgId
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        val cleanAuthority = authority.trim()
+        if (cleanAuthority.isBlank()) {
+            val msg = "Missing Companion IPC ContentProvider authority for ${pkg.name}."
+            recordHistory(pkg, "ACTIVATE_IPC", "FAILED", msg)
+            return@withContext Result.failure(IllegalArgumentException(msg))
+        }
+        val repo = pkg.repoId?.let { extensionDao.getRepoById(it) }
+        if (repo != null && !repo.isTrusted) {
+            val msg = "Repository '${repo.name}' is untrusted. Trust repository before activating Companion IPC."
+            recordHistory(pkg, "ACTIVATE_IPC", "BLOCKED", msg)
+            return@withContext Result.failure(SecurityException(msg))
+        }
+
+        val appCtx = context
+        var detectedSig = pkg.installedSignatureSha256
+        if (appCtx != null && repo != null && repo.signingKeyFingerprint.isNotBlank()) {
+            val discovered = ExtensionSecurityManager.discoverInstalledCompanionPackages(
+                appCtx,
+                mapOf(targetPackageName to repo.signingKeyFingerprint)
+            ).firstOrNull { it.packageName == targetPackageName || it.ipcAuthority == cleanAuthority }
+            if (discovered != null) {
+                detectedSig = discovered.signatureSha256
+                if (!discovered.matchesExpectedFingerprint) {
+                    val msg = "Cat B (Signature Mismatch): Installed companion '$targetPackageName' certificate does not match repository fingerprint."
+                    extensionDao.upsertPackage(
+                        pkg.copy(
+                            isInstalled = false,
+                            isEnabled = false,
+                            compatibilityStatus = ExtensionCompatibilityStatus.SIGNATURE_MISMATCH.name,
+                            compatibilityReason = msg,
+                            installError = msg,
+                            updatedAt = System.currentTimeMillis()
+                        )
+                    )
+                    recordHistory(pkg, "ACTIVATE_IPC", "SIGNATURE_MISMATCH", msg)
+                    return@withContext Result.failure(SecurityException(msg))
+                }
+            }
+        }
+
+        val configJson = JSONObject()
+            .put("authority", cleanAuthority)
+            .put("packageName", targetPackageName)
+            .toString()
+
+        val activated = pkg.copy(
+            format = ExtensionFormat.COMPANION_IPC_EXTENSION.id,
+            adapterJson = configJson,
+            isInstalled = true,
+            isEnabled = true,
+            installedVersionCode = pkg.latestVersionCode.coerceAtLeast(pkg.versionCode),
+            hasUpdate = false,
+            installedSignatureSha256 = detectedSig,
+            libVersion = "koma-ipc-1",
+            compatibilityStatus = ExtensionCompatibilityStatus.COMPANION_IPC_READY.name,
+            compatibilityReason = "Active Option A Companion IPC ('$cleanAuthority' via '$targetPackageName'). Zero in-process DEX.",
+            installError = null,
+            updatedAt = System.currentTimeMillis()
+        )
+        extensionDao.upsertPackage(activated)
+        recordHistory(activated, "ACTIVATE_IPC", "ACTIVE", activated.compatibilityReason)
+        Result.success(Unit)
+    }
+
+    /**
+     * Scans explicitly declared `<queries>` IPC/extension packages installed cleanly by the user.
+     * Verified Option A companions become IPC-ready; standard Mihon APKs remain restricted.
+     */
+    suspend fun syncInstalledCompanionApps(): Int = withContext(Dispatchers.IO) {
+        val appCtx = context ?: return@withContext 0
+        val reposById = extensionDao.getReposOnce().associateBy { it.id }
+        val existingPkgs = extensionDao.getPackagesOnce()
+        val expectedFps = existingPkgs.mapNotNull { pkg ->
+            val fp = pkg.repoId?.let { reposById[it]?.signingKeyFingerprint }.orEmpty()
+            if (fp.isNotBlank()) pkg.pkgId to fp else null
+        }.toMap()
+
+        val discovered = ExtensionSecurityManager.discoverInstalledCompanionPackages(appCtx, expectedFps)
+        if (discovered.isEmpty()) return@withContext 0
+
+        var updatedCount = 0
+        val byPkgId = existingPkgs.associateBy { it.pkgId }
+        discovered.forEach { info ->
+            val pkg = byPkgId[info.packageName] ?: return@forEach
+            val repo = pkg.repoId?.let { reposById[it] }
+            val expectedFp = repo?.signingKeyFingerprint.orEmpty()
+            val sigOk = expectedFp.isBlank() || info.matchesExpectedFingerprint
+
+            if (info.ipcAuthority.isNotBlank() && sigOk && (repo?.isTrusted != false)) {
+                val cfg = JSONObject()
+                    .put("authority", info.ipcAuthority)
+                    .put("packageName", info.packageName)
+                    .toString()
+                val next = pkg.copy(
+                    format = ExtensionFormat.COMPANION_IPC_EXTENSION.id,
+                    adapterJson = cfg,
+                    libVersion = "koma-ipc-1",
+                    installedSignatureSha256 = info.signatureSha256,
+                    compatibilityStatus = ExtensionCompatibilityStatus.COMPANION_IPC_READY.name,
+                    compatibilityReason = "Option A Companion IPC detected on device ('${info.ipcAuthority}'). Tap Activate IPC to enable source.",
+                    installError = null,
+                    updatedAt = System.currentTimeMillis()
+                )
+                if (next.compatibilityStatus != pkg.compatibilityStatus || next.adapterJson != pkg.adapterJson) {
+                    extensionDao.upsertPackage(next)
+                    updatedCount++
+                }
+            } else if (!sigOk) {
+                extensionDao.upsertPackage(
+                    pkg.copy(
+                        isInstalled = false,
+                        isEnabled = false,
+                        installedSignatureSha256 = info.signatureSha256,
+                        compatibilityStatus = ExtensionCompatibilityStatus.SIGNATURE_MISMATCH.name,
+                        compatibilityReason = "Cat B (Signature Mismatch): Installed app '${info.packageName}' certificate does not match repository fingerprint.",
+                        installError = "Companion signing certificate mismatch.",
+                        updatedAt = System.currentTimeMillis()
+                    )
+                )
+                updatedCount++
+            }
+        }
+        updatedCount
+    }
+
+    /**
+     * Downloads a Mihon APK over HTTPS into `filesDir/extensions_cache/`, performs Layer 1 ZIP +
+     * Layer 2 PackageManager structural inspection, checks signing certificate against repository
+     * fingerprint, and classifies into Category A / B / C / D (plus Option A / Option C availability).
+     * NEVER sets `isInstalled = true` for native DEX APKs and NEVER executes foreign DEX bytecode.
      */
     suspend fun downloadAndVerifyMihonApk(pkg: ExtensionPackageEntity): Result<ExtensionPackageEntity> =
         withContext(Dispatchers.IO) {
@@ -150,58 +289,87 @@ class ExtensionPackageManager(
 
                 _downloadProgress.update { it + (pkg.pkgId to 0.98f) }
 
-                val fileSha = ExtensionSecurityManager.computeFileSha256(destFile)
-                val apkAudit = ExtensionSecurityManager.inspectApkArchive(appCtx, destFile)
                 val expectedFp = repo?.signingKeyFingerprint.orEmpty()
-                val actualSig = apkAudit?.signatureSha256.orEmpty()
-                val sigMatches = if (actualSig.isBlank()) {
-                    true
-                } else {
-                    ExtensionSecurityManager.fingerprintsMatch(expectedFp, actualSig)
+                val apkAudit = ExtensionSecurityManager.inspectApkStructural(
+                    context = appCtx,
+                    apkFile = destFile,
+                    expectedPkgId = pkg.pkgId
+                )
+                val companionInfo = ExtensionSecurityManager.discoverInstalledCompanionPackages(
+                    context = appCtx,
+                    expectedFingerprintsByPkg = if (expectedFp.isNotBlank()) mapOf(pkg.pkgId to expectedFp) else emptyMap()
+                ).firstOrNull {
+                    it.packageName == pkg.pkgId ||
+                        (apkAudit.ipcAuthority.isNotBlank() && it.ipcAuthority == apkAudit.ipcAuthority)
                 }
 
-                val compat = ExtensionCompatibilityResolver.evaluateMetadata(
-                    format = ExtensionFormat.fromId(pkg.format),
-                    versionName = apkAudit?.versionName?.ifBlank { pkg.versionName } ?: pkg.versionName,
+                val compat = ExtensionCompatibilityResolver.evaluateApkArchive(
+                    pkg = pkg,
+                    inspection = apkAudit,
                     isRepoTrusted = repo?.isTrusted ?: true,
-                    signatureMatch = sigMatches,
-                    explicitLibVersion = pkg.libVersion.takeIf { it.isNotBlank() }
+                    expectedFingerprint = expectedFp,
+                    installedCompanion = companionInfo
                 )
 
-                val verified = pkg.copy(
+                val isFailureCategory = compat.category == ApkIncompatibilityCategory.MALFORMED_OR_INCOMPLETE
+                val isIpcReady = compat.status == ExtensionCompatibilityStatus.COMPANION_IPC_READY
+                val updatedAdapterJson = if (isIpcReady && companionInfo != null) {
+                    JSONObject()
+                        .put("authority", companionInfo.ipcAuthority)
+                        .put("packageName", companionInfo.packageName)
+                        .toString()
+                } else {
+                    pkg.adapterJson
+                }
+
+                val inspected = pkg.copy(
+                    format = if (isIpcReady) ExtensionFormat.COMPANION_IPC_EXTENSION.id else pkg.format,
+                    adapterJson = updatedAdapterJson,
                     isInstalled = false,
                     isEnabled = false,
                     localApkPath = destFile.absolutePath,
-                    signatureHash = fileSha.take(16),
-                    installedSignatureSha256 = actualSig,
-                    isNsfw = apkAudit?.isNsfw ?: pkg.isNsfw,
-                    hasReadme = apkAudit?.hasReadme ?: pkg.hasReadme,
+                    signatureHash = if (isFailureCategory) "" else apkAudit.fileSha256.take(16),
+                    installedSignatureSha256 = apkAudit.signatureSha256,
+                    isNsfw = if (apkAudit.packageManagerParsed) apkAudit.isNsfw else pkg.isNsfw,
+                    hasReadme = if (apkAudit.packageManagerParsed) apkAudit.hasReadme else pkg.hasReadme,
                     libVersion = compat.libVersion,
                     compatibilityStatus = compat.status.name,
                     compatibilityReason = buildString {
-                        append("Downloaded & SHA-256 verified (${fileSha.take(16)}…). ")
                         append(compat.reason)
-                        if (apkAudit?.extensionClass?.isNotBlank() == true) {
-                            append(" Entry class: ${apkAudit.extensionClass}.")
+                        if (apkAudit.fileSha256.isNotBlank()) {
+                            append(" SHA-256: ${apkAudit.fileSha256.take(16)}…")
+                        }
+                        if (apkAudit.minSdkVersion > 0) {
+                            append(" (minSdk=${apkAudit.minSdkVersion}, targetSdk=${apkAudit.targetSdkVersion})")
                         }
                     },
-                    installError = if (compat.status == ExtensionCompatibilityStatus.SIGNATURE_MISMATCH) {
-                        compat.reason
-                    } else null,
+                    installError = if (isFailureCategory) compat.reason else null,
                     updatedAt = System.currentTimeMillis()
                 )
-                extensionDao.upsertPackage(verified)
-                recordHistory(
-                    verified,
-                    action = "VERIFY_APK",
-                    outcome = if (sigMatches) "VERIFIED_UNSUPPORTED_RUNTIME" else "SIGNATURE_MISMATCH",
-                    details = verified.compatibilityReason
-                )
+                extensionDao.upsertPackage(inspected)
+
+                val auditOutcome = when (compat.status) {
+                    ExtensionCompatibilityStatus.COMPANION_IPC_READY -> "IPC_COMPANION_READY"
+                    ExtensionCompatibilityStatus.NATIVE_EQUIVALENT_AVAILABLE -> "VERIFIED_NATIVE_ALT_AVAILABLE"
+                    ExtensionCompatibilityStatus.VERIFIED_MIHON_RUNTIME_RESTRICTED -> "VERIFIED_MIHON_DEX_RESTRICTED"
+                    ExtensionCompatibilityStatus.LIB_VERSION_INCOMPATIBLE -> "CAT_A_API_MISMATCH"
+                    ExtensionCompatibilityStatus.MALFORMED_APK -> "CAT_B_MALFORMED_APK"
+                    ExtensionCompatibilityStatus.SIGNATURE_MISMATCH -> "CAT_B_SIGNATURE_MISMATCH"
+                    ExtensionCompatibilityStatus.DIFFERENT_ARCHITECTURE -> "CAT_D_DIFFERENT_ARCH"
+                    else -> compat.status.name
+                }
+                recordHistory(inspected, action = "VERIFY_APK", outcome = auditOutcome, details = inspected.compatibilityReason)
                 _downloadProgress.update { it - pkg.pkgId }
-                if (!sigMatches) {
-                    Result.failure(SecurityException(compat.reason))
+
+                if (isFailureCategory) {
+                    val failureEx = if (compat.status == ExtensionCompatibilityStatus.SIGNATURE_MISMATCH) {
+                        SecurityException(compat.reason)
+                    } else {
+                        IOException(compat.reason)
+                    }
+                    Result.failure(failureEx)
                 } else {
-                    Result.success(verified)
+                    Result.success(inspected)
                 }
             } catch (e: Exception) {
                 tempFile.delete()
@@ -221,16 +389,24 @@ class ExtensionPackageManager(
         extensionDao.uninstallPackage(pkgId)
         if (existing != null) {
             if (existing.format != ExtensionFormat.KOMA_JSON_ADAPTER.id) {
+                val resetFormat = if (existing.format == ExtensionFormat.COMPANION_IPC_EXTENSION.id) {
+                    ExtensionFormat.MIHON_JSON_INDEX
+                } else {
+                    ExtensionFormat.fromId(existing.format)
+                }
                 val compat = ExtensionCompatibilityResolver.evaluateMetadata(
-                    format = ExtensionFormat.fromId(existing.format),
+                    format = resetFormat,
                     versionName = existing.versionName,
                     isRepoTrusted = true,
                     signatureMatch = true,
-                    explicitLibVersion = existing.libVersion.takeIf { it.isNotBlank() }
+                    explicitLibVersion = existing.libVersion.takeIf { it.isNotBlank() && it != "koma-ipc-1" },
+                    pkgId = existing.pkgId,
+                    extensionName = existing.name
                 )
                 extensionDao.upsertPackage(
                     existing.copy(
                         isInstalled = false,
+                        isEnabled = false,
                         hasUpdate = false,
                         localApkPath = "",
                         installedSignatureSha256 = "",

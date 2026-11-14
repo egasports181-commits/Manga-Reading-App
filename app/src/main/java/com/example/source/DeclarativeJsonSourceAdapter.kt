@@ -13,9 +13,9 @@ import java.io.IOException
 import java.net.URLEncoder
 
 /**
- * Sandboxed Koma Declarative JSON Source Adapter (`koma_json_v1`).
+ * Option B: Sandboxed Koma Declarative JSON Source Adapter (`koma_json_v1`, API v1).
  * Parses a declarative JSON descriptor specifying HTTPS REST endpoints,
- * dot-path JSON field selectors, and optional static request headers.
+ * dot-path JSON field selectors, pagination offsets, and optional request/page headers.
  * Executes ZERO remote JavaScript and loads ZERO native/DEX code.
  */
 class DeclarativeJsonSourceAdapter(
@@ -28,8 +28,10 @@ class DeclarativeJsonSourceAdapter(
 
     override val category: String = "Koma Extension"
     override val baseUrl: String = descriptor.optString("baseUrl", "").trim()
-    override val supportsFilters: Boolean = false
+    override val supportsFilters: Boolean = descriptor.optString("searchEndpoint", "").contains("{lang}")
     override val supportsLogin: Boolean = false
+
+    private val pageSize: Int = descriptor.optInt("pageSize", 20).coerceIn(1, 200)
 
     override suspend fun isAvailable(): Boolean = checkStatus().isOnline
 
@@ -62,54 +64,71 @@ class DeclarativeJsonSourceAdapter(
     }
 
     override suspend fun getPopular(page: Int, filters: SearchFilters): SourcePagedResult =
-        fetchList(descriptor.optString("popularEndpoint", ""), page)
+        fetchList(descriptor.optString("popularEndpoint", ""), page, filters)
 
     override suspend fun getLatest(page: Int, filters: SearchFilters): SourcePagedResult =
-        fetchList(descriptor.optString("latestEndpoint", descriptor.optString("popularEndpoint", "")), page)
+        fetchList(descriptor.optString("latestEndpoint", descriptor.optString("popularEndpoint", "")), page, filters)
 
     override suspend fun search(query: String, page: Int, filters: SearchFilters): SourcePagedResult {
         val template = descriptor.optString("searchEndpoint", "")
         if (template.isBlank()) return SourcePagedResult(emptyList(), false)
         val encoded = URLEncoder.encode(query, "UTF-8")
-        return fetchList(template.replace("{query}", encoded), page)
+        return fetchList(template.replace("{query}", encoded), page, filters)
     }
 
-    private suspend fun fetchList(endpointTemplate: String, page: Int): SourcePagedResult =
-        withContext(Dispatchers.IO) {
-            if (endpointTemplate.isBlank()) return@withContext SourcePagedResult(emptyList(), false)
-            val url = resolveUrl(endpointTemplate.replace("{page}", page.toString()))
-            val jsonText = executeGet(url)
-            val root = parseJsonRoot(jsonText)
-            val listPath = descriptor.optString("itemsPath", "items")
-            val array = extractArray(root, listPath)
-            val keyField = descriptor.optString("idField", "id")
-            val titleField = descriptor.optString("titleField", "title")
-            val coverField = descriptor.optString("coverField", "cover")
-            val authorField = descriptor.optString("authorField", "author")
-            val descField = descriptor.optString("descriptionField", "description")
-            val statusField = descriptor.optString("statusField", "status")
+    private suspend fun fetchList(
+        endpointTemplate: String,
+        page: Int,
+        filters: SearchFilters
+    ): SourcePagedResult = withContext(Dispatchers.IO) {
+        if (endpointTemplate.isBlank()) return@withContext SourcePagedResult(emptyList(), false)
+        val offset = ((page - 1).coerceAtLeast(0)) * pageSize
+        val resolvedTemplate = endpointTemplate
+            .replace("{page}", page.toString())
+            .replace("{offset}", offset.toString())
+            .replace("{limit}", pageSize.toString())
+            .replace("{lang}", URLEncoder.encode(filters.language ?: language, "UTF-8"))
+        val url = resolveUrl(resolvedTemplate)
+        val jsonText = executeGet(url)
+        val root = parseJsonRoot(jsonText)
+        val listPath = descriptor.optString("itemsPath", "items")
+        val array = extractArray(root, listPath)
+        val keyField = descriptor.optString("idField", "id")
+        val titleField = descriptor.optString("titleField", "title")
+        val coverField = descriptor.optString("coverField", "cover")
+        val authorField = descriptor.optString("authorField", "author")
+        val descField = descriptor.optString("descriptionField", "description")
+        val statusField = descriptor.optString("statusField", "status")
+        val latestField = descriptor.optString("latestChapterField", "latestChapter")
 
-            val items = buildList {
-                for (i in 0 until array.length()) {
-                    val obj = array.optJSONObject(i) ?: continue
-                    val rawCover = extractString(obj, coverField)
-                    add(
-                        SourceMangaItem(
-                            sourceId = id,
-                            sourceName = name,
-                            mangaKey = extractString(obj, keyField),
-                            title = extractString(obj, titleField).ifBlank { "Untitled" },
-                            coverUrl = normalizeOptionalHttpsUrl(rawCover),
-                            author = extractString(obj, authorField),
-                            description = extractString(obj, descField),
-                            status = MangaStatus.fromString(extractString(obj, statusField)),
-                            language = language
-                        )
+        val items = buildList {
+            for (i in 0 until array.length()) {
+                val obj = array.optJSONObject(i) ?: continue
+                val rawCover = extractString(obj, coverField)
+                add(
+                    SourceMangaItem(
+                        sourceId = id,
+                        sourceName = name,
+                        mangaKey = extractString(obj, keyField),
+                        title = extractString(obj, titleField).ifBlank { "Untitled" },
+                        coverUrl = normalizeOptionalHttpsUrl(rawCover),
+                        author = extractString(obj, authorField),
+                        description = extractString(obj, descField),
+                        status = MangaStatus.fromString(extractString(obj, statusField)),
+                        language = language,
+                        latestChapterName = extractString(obj, latestField)
                     )
-                }
+                )
             }
-            SourcePagedResult(items, hasNextPage = items.size >= 20)
         }
+        val hasNextPath = descriptor.optString("hasNextPath", "")
+        val hasNext = if (hasNextPath.isNotBlank() && root is JSONObject) {
+            extractValue(root, hasNextPath)?.toString()?.toBooleanStrictOrNull() ?: (items.size >= pageSize)
+        } else {
+            items.size >= pageSize
+        }
+        SourcePagedResult(items, hasNextPage = hasNext)
+    }
 
     override suspend fun getMangaDetails(mangaKey: String): SourceMangaItem = withContext(Dispatchers.IO) {
         val template = descriptor.optString("detailsEndpoint", "")
@@ -119,6 +138,15 @@ class DeclarativeJsonSourceAdapter(
         val root = JSONObject(executeGet(resolveUrl(template.replace("{id}", mangaKey))))
         val detailsPath = descriptor.optString("detailsPath", "")
         val obj = if (detailsPath.isNotBlank()) extractObject(root, detailsPath) ?: root else root
+        val genresPath = descriptor.optString("genresField", "genres")
+        val genres = buildList {
+            val gRaw = extractValue(obj, genresPath)
+            if (gRaw is JSONArray) {
+                for (i in 0 until gRaw.length()) {
+                    gRaw.optString(i).takeIf { it.isNotBlank() }?.let { add(it) }
+                }
+            }
+        }
         SourceMangaItem(
             sourceId = id,
             sourceName = name,
@@ -127,6 +155,7 @@ class DeclarativeJsonSourceAdapter(
             coverUrl = normalizeOptionalHttpsUrl(extractString(obj, descriptor.optString("coverField", "cover"))),
             author = extractString(obj, descriptor.optString("authorField", "author")),
             description = extractString(obj, descriptor.optString("descriptionField", "description")),
+            genres = genres,
             status = MangaStatus.fromString(extractString(obj, descriptor.optString("statusField", "status"))),
             language = language
         )
@@ -140,6 +169,7 @@ class DeclarativeJsonSourceAdapter(
         val chapterIdField = descriptor.optString("chapterIdField", "id")
         val chapterTitleField = descriptor.optString("chapterTitleField", "title")
         val chapterNumberField = descriptor.optString("chapterNumberField", "number")
+        val scanlatorField = descriptor.optString("scanlatorField", "scanlator")
         buildList {
             for (i in 0 until arr.length()) {
                 val obj = arr.optJSONObject(i) ?: continue
@@ -149,7 +179,8 @@ class DeclarativeJsonSourceAdapter(
                     SourceChapter(
                         chapterKey = extractString(obj, chapterIdField),
                         name = extractString(obj, chapterTitleField).ifBlank { "Chapter ${i + 1}" },
-                        chapterNumber = numVal
+                        chapterNumber = numVal,
+                        scanlator = extractString(obj, scanlatorField)
                     )
                 )
             }
@@ -162,6 +193,8 @@ class DeclarativeJsonSourceAdapter(
         val root = parseJsonRoot(executeGet(resolveUrl(template.replace("{chapterId}", chapterKey))))
         val arr = extractArray(root, descriptor.optString("pagesPath", "pages"))
         val pageUrlField = descriptor.optString("pageUrlField", "url")
+        val staticPageHeaders = readHeaderMap(descriptor.optJSONObject("pageHeaders"))
+            .ifEmpty { readHeaderMap(descriptor.optJSONObject("headers")) }
         buildList {
             for (i in 0 until arr.length()) {
                 val entry = arr.opt(i)
@@ -171,7 +204,7 @@ class DeclarativeJsonSourceAdapter(
                     else -> ""
                 }
                 if (rawUrl.isNotBlank()) {
-                    add(SourcePage(index = i, imageUrl = resolveUrl(rawUrl)))
+                    add(SourcePage(index = i, imageUrl = resolveUrl(rawUrl), headers = staticPageHeaders))
                 }
             }
         }
@@ -192,22 +225,30 @@ class DeclarativeJsonSourceAdapter(
 
     private fun normalizeOptionalHttpsUrl(raw: String): String {
         if (raw.isBlank()) return ""
-        return if (raw.startsWith("https://")) raw
-        else if (raw.startsWith("/")) baseUrl.trimEnd('/') + raw
-        else ""
+        return when {
+            raw.startsWith("https://") -> raw
+            raw.startsWith("/") -> baseUrl.trimEnd('/') + raw
+            else -> ""
+        }
+    }
+
+    private fun readHeaderMap(obj: JSONObject?): Map<String, String> {
+        if (obj == null) return emptyMap()
+        val map = linkedMapOf<String, String>()
+        val keys = obj.keys()
+        while (keys.hasNext()) {
+            val key = keys.next()
+            val value = obj.optString(key)
+            if (key.isNotBlank() && value.isNotBlank() && !key.equals("Host", ignoreCase = true)) {
+                map[key] = value
+            }
+        }
+        return map
     }
 
     private fun applyHeaders(builder: Request.Builder): Request.Builder {
-        val headersObj = descriptor.optJSONObject("headers")
-        if (headersObj != null) {
-            val keys = headersObj.keys()
-            while (keys.hasNext()) {
-                val key = keys.next()
-                val value = headersObj.optString(key)
-                if (key.isNotBlank() && value.isNotBlank() && !key.equals("Host", ignoreCase = true)) {
-                    builder.header(key, value)
-                }
-            }
+        readHeaderMap(descriptor.optJSONObject("headers")).forEach { (key, value) ->
+            builder.header(key, value)
         }
         return builder
     }

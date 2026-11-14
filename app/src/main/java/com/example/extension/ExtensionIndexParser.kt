@@ -13,6 +13,7 @@ import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.security.MessageDigest
 import java.util.zip.GZIPInputStream
+import java.util.zip.InflaterInputStream
 
 data class RepoCompanionMeta(
     val name: String = "",
@@ -67,10 +68,10 @@ object ExtensionIndexParser {
         }
 
         val bytes = try {
-            maybeGunzip(rawBytes)
+            maybeDecompress(rawBytes)
         } catch (e: Exception) {
             throw IllegalArgumentException(
-                "Failed to gunzip index from '$indexUrl' (Content-Type: ${contentType ?: "unknown"}): ${e.message}",
+                "Failed to decompress index from '$indexUrl' (Content-Type: ${contentType ?: "unknown"}, ${rawBytes.size} bytes): ${e.message}",
                 e
             )
         }
@@ -91,6 +92,18 @@ object ExtensionIndexParser {
             )
         }
 
+        // Reject ZIP / APK archives before Protobuf decoding
+        if (bytes.size >= 4 &&
+            bytes[0] == 0x50.toByte() &&
+            bytes[1] == 0x4B.toByte() &&
+            bytes[2] == 0x03.toByte() &&
+            bytes[3] == 0x04.toByte()
+        ) {
+            throw IllegalArgumentException(
+                "Expected repository index from '$indexUrl' but received a ZIP/APK archive (${bytes.size} bytes, Content-Type: ${contentType ?: "unknown"})."
+            )
+        }
+
         // Detect UTF-8 JSON (object wrapper, standalone koma_json_v1 manifest, or JSON array)
         val trimmedText = tryUtf8TextIfJson(bytes)
         if (trimmedText != null) {
@@ -104,6 +117,15 @@ object ExtensionIndexParser {
             )
         }
 
+        // Reject plain-text responses (e.g. "404: Not Found" or CDN error banners) before Protobuf parsing
+        val plainTextError = sniffPlainTextError(bytes)
+        if (plainTextError != null) {
+            throw IllegalArgumentException(
+                "Expected binary Protobuf or JSON index from '$indexUrl' but received plain text " +
+                    "(Content-Type: ${contentType ?: "unknown"}): \"$plainTextError\""
+            )
+        }
+
         // Binary Protobuf `index.pb` (supports both Keiyoushi index_v2 and legacy index_v1)
         return try {
             parseProtobufIndex(
@@ -113,8 +135,9 @@ object ExtensionIndexParser {
                 digest = digest
             )
         } catch (e: Exception) {
+            val headHex = bytes.take(8).joinToString(" ") { "%02X".format(it) }
             throw IllegalArgumentException(
-                "Failed parsing Protobuf index from '$indexUrl' (Content-Type: ${contentType ?: "unknown"}, ${bytes.size} bytes): ${e.message}",
+                "Failed parsing Protobuf index from '$indexUrl' (Content-Type: ${contentType ?: "unknown"}, ${bytes.size} bytes, head=[$headHex]): ${e.message}",
                 e
             )
         }
@@ -193,25 +216,48 @@ object ExtensionIndexParser {
         }
     }
 
-    private fun maybeGunzip(bytes: ByteArray): ByteArray {
+    private fun maybeDecompress(bytes: ByteArray): ByteArray {
+        val maxDecompressedBytes = 32 * 1024 * 1024
         if (bytes.size >= 2 && bytes[0] == 0x1F.toByte() && bytes[1] == 0x8B.toByte()) {
             GZIPInputStream(ByteArrayInputStream(bytes)).use { gz ->
-                val out = ByteArrayOutputStream()
-                val buf = ByteArray(8192)
-                var read = gz.read(buf)
-                while (read >= 0) {
-                    out.write(buf, 0, read)
-                    read = gz.read(buf)
-                }
-                return out.toByteArray()
+                return readBoundedStream(gz, maxDecompressedBytes)
+            }
+        }
+        // Zlib / DEFLATE wrapper (RFC 1950): CMF=0x78 with valid FCHECK (divisible by 31)
+        if (bytes.size >= 2 && (bytes[0].toInt() and 0x0F) == 8) {
+            val headerWord = ((bytes[0].toInt() and 0xFF) shl 8) or (bytes[1].toInt() and 0xFF)
+            if (headerWord % 31 == 0) {
+                return runCatching {
+                    InflaterInputStream(ByteArrayInputStream(bytes)).use { inf ->
+                        readBoundedStream(inf, maxDecompressedBytes)
+                    }
+                }.getOrDefault(bytes)
             }
         }
         return bytes
     }
 
+    private fun readBoundedStream(input: java.io.InputStream, maxBytes: Int): ByteArray {
+        val out = ByteArrayOutputStream()
+        val buf = ByteArray(8192)
+        var total = 0
+        var read = input.read(buf)
+        while (read >= 0) {
+            if (read > 0) {
+                total += read
+                if (total > maxBytes) {
+                    throw IllegalArgumentException("Repository index exceeds max decompressed size (${maxBytes / (1024 * 1024)} MiB).")
+                }
+                out.write(buf, 0, read)
+            }
+            read = input.read(buf)
+        }
+        return out.toByteArray()
+    }
+
     private fun sniffHtmlOrXml(bytes: ByteArray): String? {
         val sampleLen = minOf(bytes.size, 256)
-        var i = skipBomAndWhitespace(bytes, sampleLen)
+        val i = skipBomAndWhitespace(bytes, sampleLen)
         if (i >= sampleLen) return null
         val first = bytes[i].toInt().toChar()
         if (first != '<') return null
@@ -228,6 +274,28 @@ object ExtensionIndexParser {
             lower.startsWith("<error")
         ) {
             snippet
+        } else {
+            null
+        }
+    }
+
+    private fun sniffPlainTextError(bytes: ByteArray): String? {
+        val limit = minOf(bytes.size, 512)
+        val start = skipBomAndWhitespace(bytes, limit)
+        if (start >= limit) return "whitespace only"
+        val sample = bytes.copyOfRange(start, limit)
+        // Protobuf binary contains low control bytes (e.g. tags 0x08, 0x0A, 0x12) whereas plain-text HTTP errors are ASCII printable + \r\n\t
+        val allTextChars = sample.all { b ->
+            val v = b.toInt() and 0xFF
+            v == 0x09 || v == 0x0A || v == 0x0D || v in 0x20..0x7E
+        }
+        if (!allTextChars) return null
+        // Even if bytes happen to fall in printable ASCII, check for exact protobuf framing vs readable error text
+        val text = String(sample, Charsets.UTF_8).trim()
+        val hasSpacesOrPunct = text.any { it == ' ' || it == ':' }
+        val looksProto = bytes.size >= 4 && looksLikeProtobufMessage(bytes.copyOfRange(0, minOf(bytes.size, 256)), minFields = 2)
+        return if (hasSpacesOrPunct && !looksProto) {
+            text.replace("\n", " ").replace("\r", " ").take(120)
         } else {
             null
         }
@@ -336,7 +404,9 @@ object ExtensionIndexParser {
                     format = ExtensionFormat.MIHON_JSON_INDEX,
                     versionName = vName,
                     isRepoTrusted = true,
-                    signatureMatch = true
+                    signatureMatch = true,
+                    pkgId = pkg,
+                    extensionName = rawName
                 )
                 add(
                     ExtensionPackageEntity(
@@ -564,14 +634,16 @@ object ExtensionIndexParser {
         digest: String,
         isV2: Boolean
     ): ExtensionPackageEntity {
-        val resolvedApkUrl = ext.apkUrl.ifBlank { resolveApkUrl(baseRepoDir, ext.apkName) }
+        val resolvedApkUrl = resolveApkUrl(baseRepoDir, ext.apkUrl.ifBlank { ext.apkName })
         val resolvedIconUrl = ext.iconUrl.ifBlank { resolveIconUrl(baseRepoDir, ext.pkgName) }
         val compat = ExtensionCompatibilityResolver.evaluateMetadata(
             format = ExtensionFormat.MIHON_PROTOBUF_INDEX,
             versionName = ext.versionName,
             isRepoTrusted = true,
             signatureMatch = true,
-            explicitLibVersion = ext.explicitLibVersion
+            explicitLibVersion = ext.explicitLibVersion,
+            pkgId = ext.pkgName,
+            extensionName = ext.name
         )
         return ExtensionPackageEntity(
             pkgId = ext.pkgName,
@@ -648,12 +720,17 @@ object ExtensionIndexParser {
             .ifBlank { pkgName }
         val name = rawName.removePrefix("Tachiyomi: ").removePrefix("Mihon: ")
 
-        // Parse field 3 artifacts (apkUrl, iconUrl)
+        // Parse field 3 artifacts (apkUrl, iconUrl) - supports both multi-field & single-field submessages or raw UTF-8 strings
         var apkUrl = ""
         var iconUrl = ""
         var apkName = ""
         bytesByField[3]?.firstOrNull()?.let { f3Bytes ->
-            if (looksLikeProtobufMessage(f3Bytes)) {
+            val rawUtf8 = String(f3Bytes, Charsets.UTF_8)
+            val looksPlainUrl = rawUtf8.startsWith("https://") || rawUtf8.startsWith("http://")
+            val looksPlainApkFilename = rawUtf8.endsWith(".apk", ignoreCase = true) &&
+                rawUtf8.none { it.isISOControl() } &&
+                !looksLikeProtobufMessage(f3Bytes, minFields = 1)
+            if (!looksPlainUrl && !looksPlainApkFilename && looksLikeProtobufMessage(f3Bytes, minFields = 1)) {
                 val artReader = ProtobufWireReader(f3Bytes)
                 while (!artReader.isAtEnd()) {
                     val tag = artReader.readTag() ?: break
@@ -670,8 +747,8 @@ object ExtensionIndexParser {
                     }
                 }
             } else {
-                val raw = String(f3Bytes, Charsets.UTF_8).trim()
-                if (raw.startsWith("https://")) apkUrl = raw else apkName = raw
+                val clean = rawUtf8.trim()
+                if (clean.startsWith("https://")) apkUrl = clean else apkName = clean
             }
         }
         if (apkName.isBlank() && apkUrl.isNotBlank()) {
@@ -831,7 +908,7 @@ object ExtensionIndexParser {
         )
     }
 
-    private fun looksLikeProtobufMessage(data: ByteArray): Boolean {
+    private fun looksLikeProtobufMessage(data: ByteArray, minFields: Int = 2): Boolean {
         if (data.size < 2) return false
         return runCatching {
             val r = ProtobufWireReader(data)
@@ -847,7 +924,7 @@ object ExtensionIndexParser {
                 }
                 fields++
             }
-            fields >= 2 && r.isAtEnd()
+            fields >= minFields && r.isAtEnd()
         }.getOrDefault(false)
     }
 
@@ -922,10 +999,16 @@ object ExtensionIndexParser {
     }
 
     private fun resolveApkUrl(baseRepoDir: String, apkName: String): String {
-        if (apkName.isBlank()) return ""
-        if (apkName.startsWith("https://")) return apkName
+        val clean = apkName.trim()
+        if (clean.isBlank()) return ""
+        if (clean.startsWith("https://") || clean.startsWith("http://")) return clean
         if (baseRepoDir.isBlank()) return ""
-        return "$baseRepoDir/apk/${apkName.trimStart('/')}"
+        val trimmedRel = clean.trimStart('/')
+        return if (trimmedRel.startsWith("apk/")) {
+            "$baseRepoDir/$trimmedRel"
+        } else {
+            "$baseRepoDir/apk/$trimmedRel"
+        }
     }
 
     private fun resolveIconUrl(baseRepoDir: String, pkgName: String): String {

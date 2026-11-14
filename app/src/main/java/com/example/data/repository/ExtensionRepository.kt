@@ -61,6 +61,16 @@ class ExtensionRepository(
     suspend fun installExtension(pkg: ExtensionPackageEntity): Result<Unit> =
         packageManager.installKomaAdapter(pkg)
 
+    suspend fun activateCompanionIpc(
+        pkg: ExtensionPackageEntity,
+        authority: String,
+        targetPackageName: String = pkg.pkgId
+    ): Result<Unit> =
+        packageManager.activateCompanionIpc(pkg, authority, targetPackageName)
+
+    suspend fun syncInstalledCompanionApps(): Int =
+        packageManager.syncInstalledCompanionApps()
+
     suspend fun downloadAndVerifyMihonApk(pkg: ExtensionPackageEntity): Result<ExtensionPackageEntity> =
         packageManager.downloadAndVerifyMihonApk(pkg)
 
