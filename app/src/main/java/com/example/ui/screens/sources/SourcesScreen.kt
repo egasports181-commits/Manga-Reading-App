@@ -258,6 +258,7 @@ fun SourcesScreen(
                     state = state,
                     onSelectSubTab = viewModel::selectExtSubTab,
                     onSearchChange = viewModel::updateExtSearch,
+                    onClearSearchAndFilters = viewModel::clearExtSearchAndFilters,
                     onLangFilterChange = viewModel::updateExtLangFilter,
                     onRepoFilterChange = viewModel::updateExtRepoFilter,
                     onCompatFilterChange = viewModel::updateExtCompatFilter,
@@ -855,6 +856,7 @@ private fun ExtensionsManagerTab(
     state: SourcesUiState,
     onSelectSubTab: (ExtensionStoreTab) -> Unit,
     onSearchChange: (String) -> Unit,
+    onClearSearchAndFilters: () -> Unit,
     onLangFilterChange: (String) -> Unit,
     onRepoFilterChange: (Long?) -> Unit,
     onCompatFilterChange: (ExtensionCompatFilter) -> Unit,
@@ -880,38 +882,89 @@ private fun ExtensionsManagerTab(
     onInspect: (ExtensionPackageEntity) -> Unit,
     onOpenNativeSource: (String) -> Unit
 ) {
-    val updatesCount = state.packages.count { (it.isInstalled || it.localApkPath.isNotBlank()) && it.hasUpdate }
+    val updatesCount = state.updatesPackagesCount
     val failedRepoCount = state.repos.count { it.isEnabled && !it.lastError.isNullOrBlank() }
 
-    LazyColumn(
-        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 112.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        item {
+    Column(modifier = Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 6.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
             Row(
                 modifier = Modifier.horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 ExtensionStoreTab.entries.forEach { subTab ->
-                    val label = if (subTab == ExtensionStoreTab.UPDATES && updatesCount > 0) {
-                        "${subTab.label} ($updatesCount)"
-                    } else if (subTab == ExtensionStoreTab.REPOSITORIES) {
-                        "${subTab.label} (${state.repos.size})"
-                    } else {
-                        subTab.label
+                    val label = when (subTab) {
+                        ExtensionStoreTab.INSTALLED -> if (state.installedPackagesCount > 0) "${subTab.label} (${state.installedPackagesCount})" else subTab.label
+                        ExtensionStoreTab.UPDATES -> if (updatesCount > 0) "${subTab.label} ($updatesCount)" else subTab.label
+                        ExtensionStoreTab.REPOSITORIES -> "${subTab.label} (${state.repos.size})"
+                        else -> subTab.label
                     }
                     FilterChip(
                         selected = state.extSubTab == subTab,
                         onClick = { onSelectSubTab(subTab) },
                         label = { Text(label) },
-                        shape = CircleShape
+                        shape = CircleShape,
+                        modifier = Modifier.testTag("ext_subtab_${subTab.name.lowercase()}")
                     )
                 }
             }
-        }
 
-        if (state.isRefreshingRepos) {
-            item {
+            if (state.extSubTab != ExtensionStoreTab.REPOSITORIES) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    OutlinedTextField(
+                        value = state.extSearchQuery,
+                        onValueChange = onSearchChange,
+                        placeholder = { Text("Search name, package, or lang (e.g. en)") },
+                        singleLine = true,
+                        shape = RoundedCornerShape(18.dp),
+                        leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Search extensions") },
+                        trailingIcon = {
+                            if (state.extSearchQuery.isNotEmpty()) {
+                                IconButton(
+                                    onClick = { onSearchChange("") },
+                                    modifier = Modifier.testTag("ext_search_clear")
+                                ) {
+                                    Icon(Icons.Default.Clear, contentDescription = "Clear search")
+                                }
+                            }
+                        },
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("ext_search_input")
+                    )
+                    FilledTonalButton(
+                        onClick = onRefreshAllRepos,
+                        shape = CircleShape,
+                        modifier = Modifier
+                            .minimumInteractiveComponentSize()
+                            .testTag("ext_sync_button")
+                    ) {
+                        Icon(Icons.Default.Sync, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Sync")
+                    }
+                    if (updatesCount > 0) {
+                        Button(
+                            onClick = onUpdateAll,
+                            shape = CircleShape,
+                            modifier = Modifier.minimumInteractiveComponentSize()
+                        ) {
+                            Text("Update ($updatesCount)")
+                        }
+                    }
+                }
+            }
+
+            if (state.isRefreshingRepos) {
                 LinearProgressIndicator(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -920,7 +973,14 @@ private fun ExtensionsManagerTab(
             }
         }
 
-        if (state.extSubTab == ExtensionStoreTab.REPOSITORIES) {
+        LazyColumn(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth(),
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 112.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            if (state.extSubTab == ExtensionStoreTab.REPOSITORIES) {
             item {
                 KomaElevatedCard(
                     shape = RoundedCornerShape(20.dp),
@@ -1124,42 +1184,6 @@ private fun ExtensionsManagerTab(
         } else {
             item {
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    OutlinedTextField(
-                        value = state.extSearchQuery,
-                        onValueChange = onSearchChange,
-                        placeholder = { Text("Search extensions, pkg ID, or source") },
-                        singleLine = true,
-                        shape = RoundedCornerShape(18.dp),
-                        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-                        modifier = Modifier.weight(1f)
-                    )
-                    FilledTonalButton(
-                        onClick = onRefreshAllRepos,
-                        shape = CircleShape,
-                        modifier = Modifier.minimumInteractiveComponentSize()
-                    ) {
-                        Icon(Icons.Default.Sync, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text("Sync")
-                    }
-                    if (updatesCount > 0) {
-                        Button(
-                            onClick = onUpdateAll,
-                            shape = CircleShape,
-                            modifier = Modifier.minimumInteractiveComponentSize()
-                        ) {
-                            Text("Update ($updatesCount)")
-                        }
-                    }
-                }
-            }
-
-            item {
-                Row(
                     modifier = Modifier.horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
@@ -1242,13 +1266,28 @@ private fun ExtensionsManagerTab(
                 item { ChapterListSkeleton(count = 5) }
             } else if (state.packages.isEmpty()) {
                 item {
-                    KomaEmptyState(
-                        title = "No Extension Packages Shown",
-                        subtitle = "Tap Sync above to fetch extension catalogs from your configured Mihon repositories, or adjust filters.",
-                        actionLabel = "Sync Repositories",
-                        onAction = onRefreshAllRepos,
-                        showIllustration = false
-                    )
+                    if (state.totalIndexedPackagesCount > 0) {
+                        val trimmedQ = state.extSearchQuery.trim()
+                        KomaEmptyState(
+                            title = if (trimmedQ.isNotEmpty()) {
+                                "No Extensions Match \"$trimmedQ\""
+                            } else {
+                                "No Matching Extensions"
+                            },
+                            subtitle = "No extensions matched your current search or filter selection (${state.totalIndexedPackagesCount} indexed across active repositories).",
+                            actionLabel = "Clear Search & Filters",
+                            onAction = onClearSearchAndFilters,
+                            showIllustration = false
+                        )
+                    } else {
+                        KomaEmptyState(
+                            title = "No Extension Packages Shown",
+                            subtitle = "Tap Sync above to fetch extension catalogs from your configured Mihon repositories.",
+                            actionLabel = "Sync Repositories",
+                            onAction = onRefreshAllRepos,
+                            showIllustration = false
+                        )
+                    }
                 }
             } else {
                 items(state.packages, key = { it.pkgId }) { pkg ->
@@ -1459,6 +1498,7 @@ private fun ExtensionsManagerTab(
             }
         }
     }
+}
 }
 
 @Composable

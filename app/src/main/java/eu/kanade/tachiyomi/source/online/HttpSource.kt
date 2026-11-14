@@ -45,9 +45,13 @@ abstract class HttpSource : CatalogueSource {
     override fun toString(): String = "$name (${lang.uppercase()})"
 
     override fun fetchPopularManga(page: Int): Observable<MangasPage> {
-        return client.newCall(popularMangaRequest(page))
-            .asObservableSuccess()
-            .map { response -> popularMangaParse(response) }
+        return Observable.defer {
+            try {
+                client.newCall(popularMangaRequest(page)).asObservableSuccess()
+            } catch (t: Throwable) {
+                Observable.error(t)
+            }
+        }.map { response -> popularMangaParse(response) }
     }
 
     protected abstract fun popularMangaRequest(page: Int): Request
@@ -57,8 +61,8 @@ abstract class HttpSource : CatalogueSource {
         return Observable.defer {
             try {
                 client.newCall(searchMangaRequest(page, query, filters)).asObservableSuccess()
-            } catch (e: NoClassDefFoundError) {
-                throw RuntimeException(e)
+            } catch (t: Throwable) {
+                Observable.error(t)
             }
         }.map { response ->
             searchMangaParse(response)
@@ -69,22 +73,30 @@ abstract class HttpSource : CatalogueSource {
     protected abstract fun searchMangaParse(response: Response): MangasPage
 
     override fun fetchLatestUpdates(page: Int): Observable<MangasPage> {
-        return client.newCall(latestUpdatesRequest(page))
-            .asObservableSuccess()
-            .map { response -> latestUpdatesParse(response) }
+        return Observable.defer {
+            try {
+                client.newCall(latestUpdatesRequest(page)).asObservableSuccess()
+            } catch (t: Throwable) {
+                Observable.error(t)
+            }
+        }.map { response -> latestUpdatesParse(response) }
     }
 
     protected abstract fun latestUpdatesRequest(page: Int): Request
     protected abstract fun latestUpdatesParse(response: Response): MangasPage
 
     override fun fetchMangaDetails(manga: SManga): Observable<SManga> {
-        return client.newCall(mangaDetailsRequest(manga))
-            .asObservableSuccess()
-            .map { response ->
-                mangaDetailsParse(response).apply {
-                    initialized = true
-                }
+        return Observable.defer {
+            try {
+                client.newCall(mangaDetailsRequest(manga)).asObservableSuccess()
+            } catch (t: Throwable) {
+                Observable.error(t)
             }
+        }.map { response ->
+            mangaDetailsParse(response).apply {
+                initialized = true
+            }
+        }
     }
 
     open fun mangaDetailsRequest(manga: SManga): Request {
@@ -94,9 +106,13 @@ abstract class HttpSource : CatalogueSource {
     protected abstract fun mangaDetailsParse(response: Response): SManga
 
     override fun fetchChapterList(manga: SManga): Observable<List<SChapter>> {
-        return client.newCall(chapterListRequest(manga))
-            .asObservableSuccess()
-            .map { response -> chapterListParse(response) }
+        return Observable.defer {
+            try {
+                client.newCall(chapterListRequest(manga)).asObservableSuccess()
+            } catch (t: Throwable) {
+                Observable.error(t)
+            }
+        }.map { response -> chapterListParse(response) }
     }
 
     open fun chapterListRequest(manga: SManga): Request {
@@ -106,9 +122,13 @@ abstract class HttpSource : CatalogueSource {
     protected abstract fun chapterListParse(response: Response): List<SChapter>
 
     override fun fetchPageList(chapter: SChapter): Observable<List<Page>> {
-        return client.newCall(pageListRequest(chapter))
-            .asObservableSuccess()
-            .map { response -> pageListParse(response) }
+        return Observable.defer {
+            try {
+                client.newCall(pageListRequest(chapter)).asObservableSuccess()
+            } catch (t: Throwable) {
+                Observable.error(t)
+            }
+        }.map { response -> pageListParse(response) }
     }
 
     open fun pageListRequest(chapter: SChapter): Request {
@@ -118,9 +138,13 @@ abstract class HttpSource : CatalogueSource {
     protected abstract fun pageListParse(response: Response): List<Page>
 
     open fun fetchImageUrl(page: Page): Observable<String> {
-        return client.newCall(imageUrlRequest(page))
-            .asObservableSuccess()
-            .map { imageUrlParse(it) }
+        return Observable.defer {
+            try {
+                client.newCall(imageUrlRequest(page)).asObservableSuccess()
+            } catch (t: Throwable) {
+                Observable.error(t)
+            }
+        }.map { imageUrlParse(it) }
     }
 
     open suspend fun getImageUrl(page: Page): String =

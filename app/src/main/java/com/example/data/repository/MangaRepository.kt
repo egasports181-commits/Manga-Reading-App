@@ -1,5 +1,6 @@
 package com.example.data.repository
 
+import android.util.Log
 import com.example.data.local.dao.*
 import com.example.data.local.entity.*
 import com.example.data.preferences.AppPreferencesRepository
@@ -7,7 +8,10 @@ import com.example.domain.model.ReadingStatsSummary
 import com.example.domain.model.SourceChapter
 import com.example.domain.model.SourceMangaItem
 import com.example.source.SourceRegistry
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -152,20 +156,28 @@ class MangaRepository(
         return entity
     }
 
-    suspend fun refreshMangaAndChapters(mangaId: String): Result<Unit> {
-        return try {
+    suspend fun refreshMangaAndChapters(mangaId: String): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
             val existing = mangaDao.getMangaById(mangaId)
-                ?: return Result.failure(IllegalStateException("Manga not found"))
+                ?: return@withContext Result.failure(IllegalStateException("Manga not found"))
             val adapter = sourceRegistry.getSourceById(existing.sourceId)
-                ?: return Result.failure(IllegalStateException("Source '${existing.sourceName}' is not active"))
+                ?: return@withContext Result.failure(IllegalStateException("Source '${existing.sourceName}' is not active"))
 
             val detail = adapter.getMangaDetails(existing.mangaKey)
             val chapters = adapter.getChapters(existing.mangaKey)
             cacheSourceManga(detail)
             syncChapters(mangaId, chapters, recordUpdates = existing.inLibrary)
+            runCatching {
+                Log.d("KiyomiRepo", "Refreshed '${detail.title}' (${chapters.size} chapters) from ${existing.sourceName}")
+            }
             Result.success(Unit)
-        } catch (e: Exception) {
-            Result.failure(e)
+        } catch (ce: CancellationException) {
+            throw ce
+        } catch (t: Throwable) {
+            runCatching {
+                Log.w("KiyomiRepo", "Failed refreshing mangaId=$mangaId (${t.javaClass.simpleName}): ${t.message}")
+            }
+            Result.failure(t)
         }
     }
 

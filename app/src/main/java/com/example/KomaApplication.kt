@@ -25,6 +25,7 @@ import com.example.source.SourceRegistry
 import com.example.util.CbzEntryFetcher
 import com.example.util.DemoPageFetcher
 import com.example.worker.LibraryUpdateWorker
+import eu.kanade.tachiyomi.network.interceptor.UncaughtExceptionInterceptor
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -55,6 +56,7 @@ class AppContainer(context: Context) {
         .cookieJar(sessionManager.cookieJar)
         .sslSocketFactory(tlsConfig.socketFactory, tlsConfig.trustManager)
         .eventListenerFactory { networkEventListener }
+        .addInterceptor(UncaughtExceptionInterceptor())
         .addInterceptor(networkInterceptor)
         .connectionSpecs(listOf(ConnectionSpec.MODERN_TLS))
         .followRedirects(true)

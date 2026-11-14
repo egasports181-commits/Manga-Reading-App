@@ -93,6 +93,11 @@ class HttpException(val code: Int) : IllegalStateException("HTTP error $code")
 fun Call.asObservable(): Observable<Response> {
     return Observable.create { subscriber: Subscriber<in Response> ->
         val call = this.clone()
+        subscriber.add(
+            rx.subscriptions.Subscriptions.create {
+                runCatching { call.cancel() }
+            }
+        )
         try {
             val response = call.execute()
             if (!subscriber.isUnsubscribed) {
@@ -102,6 +107,7 @@ fun Call.asObservable(): Observable<Response> {
                 response.close()
             }
         } catch (t: Throwable) {
+            rx.exceptions.Exceptions.throwIfFatal(t)
             if (!subscriber.isUnsubscribed) {
                 subscriber.onError(t)
             }

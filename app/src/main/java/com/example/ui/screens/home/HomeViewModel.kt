@@ -227,26 +227,29 @@ class HomeViewModel(
 
     fun openSourceManga(card: MangaCardUi, onReady: (String) -> Unit) {
         viewModelScope.launch {
-            val existing = mangaRepo.observeManga(card.id).first()
+            val existing = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                mangaRepo.observeManga(card.id).first()
+            }
             if (existing != null) {
                 onReady(existing.id)
                 return@launch
             }
             val sourceId = card.id.substringBefore("::")
             val mangaKey = card.id.substringAfter("::")
-            val adapter = sourceRegistry.getSourceById(sourceId)
-            val detail = runCatching { adapter?.getMangaDetails(mangaKey) }.getOrNull()
-                ?: SourceMangaItem(
-                    sourceId = sourceId,
-                    sourceName = card.sourceName,
-                    mangaKey = mangaKey,
-                    title = card.title,
-                    altTitle = card.altTitle,
-                    coverUrl = card.coverUrl,
-                    status = card.status,
-                    isDemoData = card.isDemoData
-                )
-            val cached = mangaRepo.cacheSourceManga(detail)
+            val summary = SourceMangaItem(
+                sourceId = sourceId,
+                sourceName = card.sourceName,
+                mangaKey = mangaKey,
+                title = card.title,
+                altTitle = card.altTitle,
+                coverUrl = card.coverUrl,
+                latestChapterName = card.latestChapter,
+                status = card.status,
+                isDemoData = card.isDemoData
+            )
+            val cached = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                mangaRepo.cacheSourceManga(summary)
+            }
             onReady(cached.id)
         }
     }

@@ -27,25 +27,25 @@ class ExtensionSessionManager(
             if (cookies.isEmpty()) return
             val host = url.host
             val existing = cache.getOrPut(host) { mutableListOf() }
-            synchronized(existing) {
+            val entities = synchronized(existing) {
                 cookies.forEach { incoming ->
                     existing.removeAll { it.name == incoming.name && it.domain == incoming.domain && it.path == incoming.path }
                     if (incoming.expiresAt > System.currentTimeMillis()) {
                         existing.add(incoming)
                     }
                 }
-            }
-            val entities = existing.map { c ->
-                ExtensionCookieEntity(
-                    host = host,
-                    name = c.name,
-                    value = c.value,
-                    domain = c.domain,
-                    path = c.path,
-                    expiresAt = c.expiresAt,
-                    secure = c.secure,
-                    httpOnly = c.httpOnly
-                )
+                existing.map { c ->
+                    ExtensionCookieEntity(
+                        host = host,
+                        name = c.name,
+                        value = c.value,
+                        domain = c.domain,
+                        path = c.path,
+                        expiresAt = c.expiresAt,
+                        secure = c.secure,
+                        httpOnly = c.httpOnly
+                    )
+                }
             }
             ioScope.launch {
                 runCatching {

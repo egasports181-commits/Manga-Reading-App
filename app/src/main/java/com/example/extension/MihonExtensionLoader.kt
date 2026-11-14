@@ -2,7 +2,7 @@ package com.example.extension
 
 import android.app.Application
 import android.content.Context
-import android.content.pm.PackageManager
+import android.util.Log
 import com.example.source.MangaSourceAdapter
 import com.example.source.MihonSourceAdapter
 import dalvik.system.PathClassLoader
@@ -32,6 +32,7 @@ object MihonRuntimeInitializer {
     ) {
         val appCtx = context.applicationContext
         val application = appCtx as? Application
+        val normalizedClient = NetworkHelper.ensureDefaultClient(httpClient)
         synchronized(this) {
             if (forceRebind || !initialized || !Injekt.hasFactory(NetworkHelper::class.java)) {
                 Injekt.registerModule(object : InjektModule {
@@ -40,8 +41,8 @@ object MihonRuntimeInitializer {
                             addSingleton(application)
                         }
                         addSingleton(fullType<Context>(), appCtx)
-                        addSingleton(httpClient)
-                        addSingleton(NetworkHelper(appCtx, httpClient))
+                        addSingleton(normalizedClient)
+                        addSingleton(NetworkHelper(appCtx, normalizedClient))
                         addSingletonFactory {
                             Json {
                                 ignoreUnknownKeys = true
@@ -52,6 +53,12 @@ object MihonRuntimeInitializer {
                     }
                 })
                 initialized = true
+                runCatching {
+                    Log.i(
+                        "KiyomiExt",
+                        "Mihon runtime initialized (interceptors=${normalizedClient.interceptors.size}, forceRebind=$forceRebind)"
+                    )
+                }
             }
         }
     }
@@ -191,6 +198,13 @@ class MihonExtensionLoader(
             activeAdapters = allAdapters,
             duplicateIdWarnings = duplicateWarnings
         )
+        runCatching {
+            Log.i(
+                "KiyomiExt",
+                "Reloaded Mihon extensions: discovered=${discovered.size}, loaded=${results.values.count { it is ExtensionLoadResult.Loaded }}, activeSources=${allAdapters.size}, errors=${results.values.count { it is ExtensionLoadResult.Error }}"
+            )
+            duplicateWarnings.forEach { Log.w("KiyomiExt", it) }
+        }
         _state.value = next
         return next
     }
@@ -254,7 +268,13 @@ class MihonExtensionLoader(
                 MihonSourceAdapter(
                     mihonSource = source,
                     extensionPackageName = installed.packageName,
-                    httpClient = httpClient
+                    httpClient = NetworkHelper.ensureDefaultClient(httpClient)
+                )
+            }
+            runCatching {
+                Log.i(
+                    "KiyomiExt",
+                    "Loaded extension ${installed.packageName} v${installed.versionName}: ${adapters.size} source(s) -> ${adapters.joinToString { "${it.id}(${it.name})" }}"
                 )
             }
             ExtensionLoadResult.Loaded(
@@ -272,6 +292,12 @@ class MihonExtensionLoader(
                 is LinkageError -> "Incompatible bytecode / ABI linkage error"
                 is SecurityException -> "Security policy blocked extension loading"
                 else -> "Failed initializing extension"
+            }
+            runCatching {
+                Log.w(
+                    "KiyomiExt",
+                    "Extension load failed for ${installed.packageName}: $kind (${t.javaClass.simpleName}): ${t.message}"
+                )
             }
             ExtensionLoadResult.Error(
                 packageName = installed.packageName,

@@ -22,11 +22,13 @@ interface MangaSourceAdapter {
                 latencyMs = (System.currentTimeMillis() - start).coerceAtLeast(1L),
                 errorReason = if (ok) null else "Source unavailable"
             )
-        } catch (e: Exception) {
+        } catch (ce: kotlinx.coroutines.CancellationException) {
+            throw ce
+        } catch (t: Throwable) {
             SourceHealthStatus(
                 isOnline = false,
                 latencyMs = System.currentTimeMillis() - start,
-                errorReason = e.message ?: "Network error"
+                errorReason = t.message ?: t.javaClass.simpleName
             )
         }
     }

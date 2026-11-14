@@ -47,6 +47,10 @@ fun SourceBrowseScreen(
     var showPrefsDialog by remember { mutableStateOf(false) }
     var showLoginDialog by remember { mutableStateOf(false) }
 
+    androidx.activity.compose.BackHandler(enabled = showSearchBar) {
+        showSearchBar = false
+    }
+
     Scaffold(
         topBar = {
             if (showSearchBar) {

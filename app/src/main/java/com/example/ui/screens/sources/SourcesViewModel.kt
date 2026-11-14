@@ -1,6 +1,7 @@
 package com.example.ui.screens.sources
 
 import android.content.Intent
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -19,10 +20,15 @@ import com.example.network.NetworkErrorFormatter
 import com.example.source.ConfiguredSourceEntry
 import com.example.source.SourceRegistry
 import com.example.ui.components.MangaCardUi
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 
 data class SourceMetaUi(
     val id: String,
@@ -51,6 +57,7 @@ enum class ExtensionSortOption(val label: String) {
 enum class ExtensionStoreTab(val label: String) {
     ALL("All"),
     INSTALLED("Installed"),
+    NOT_INSTALLED("Not installed"),
     UPDATES("Updates"),
     REPOSITORIES("Repositories")
 }
@@ -69,6 +76,10 @@ data class SourcesUiState(
     val selectedCategoryFilter: String = "all",
     val repos: List<ExtensionRepoEntity> = emptyList(),
     val packages: List<ExtensionPackageEntity> = emptyList(),
+    val totalIndexedPackagesCount: Int = 0,
+    val installedPackagesCount: Int = 0,
+    val notInstalledPackagesCount: Int = 0,
+    val updatesPackagesCount: Int = 0,
     val allPackageLanguages: List<String> = emptyList(),
     val extSubTab: ExtensionStoreTab = ExtensionStoreTab.ALL,
     val extSearchQuery: String = "",
@@ -121,6 +132,8 @@ class SourcesViewModel(
     private val healthCache = MutableStateFlow<Map<String, SourceHealthStatus>>(emptyMap())
     private val localUiState = MutableStateFlow(SourcesLocalControls())
     private val browseState = MutableStateFlow(BrowseSourceUiState())
+    private var browseJob: Job? = null
+    private var healthJob: Job? = null
     private val _osActionIntents = MutableSharedFlow<Intent>(extraBufferCapacity = 16)
     val osActionIntents: SharedFlow<Intent> = _osActionIntents.asSharedFlow()
 
@@ -200,23 +213,28 @@ class SourcesViewModel(
         }
 
         val enabledRepoIds = extSnap.repos.filter { it.isEnabled }.map { it.id }.toSet()
-        val allLangs = extSnap.pkgs.map { it.language.lowercase() }
+        val enabledRepoPackages = extSnap.pkgs.filter { pkg ->
+            pkg.repoId == null || pkg.repoId in enabledRepoIds || pkg.isInstalled || pkg.localApkPath.isNotBlank()
+        }
+        val allLangs = enabledRepoPackages.map { it.language.lowercase() }
             .filter { it.isNotBlank() }
             .distinct()
             .sorted()
 
-        val filteredPkgs = extSnap.pkgs.filter { pkg ->
-            val fromEnabledRepo = pkg.repoId == null || pkg.repoId in enabledRepoIds || pkg.isInstalled || pkg.localApkPath.isNotBlank()
-            val matchesQuery = local.extQuery.isBlank() ||
-                pkg.name.contains(local.extQuery, true) ||
-                pkg.pkgId.contains(local.extQuery, true) ||
-                pkg.author.contains(local.extQuery, true) ||
-                pkg.sourcesJson.contains(local.extQuery, true)
+        val trimmedExtQuery = local.extQuery.trim()
+        val filteredPkgs = enabledRepoPackages.filter { pkg ->
+            val matchesQuery = trimmedExtQuery.isEmpty() ||
+                pkg.name.contains(trimmedExtQuery, ignoreCase = true) ||
+                pkg.pkgId.contains(trimmedExtQuery, ignoreCase = true) ||
+                pkg.language.contains(trimmedExtQuery, ignoreCase = true) ||
+                pkg.author.contains(trimmedExtQuery, ignoreCase = true) ||
+                pkg.sourcesJson.contains(trimmedExtQuery, ignoreCase = true)
             val matchesLang = local.extLangFilter == "all" || pkg.language.equals(local.extLangFilter, true)
             val matchesRepo = local.extRepoFilterId == null || pkg.repoId == local.extRepoFilterId
             val matchesSubTab = when (local.extSubTab) {
                 ExtensionStoreTab.ALL -> true
                 ExtensionStoreTab.INSTALLED -> pkg.isInstalled
+                ExtensionStoreTab.NOT_INSTALLED -> !pkg.isInstalled
                 ExtensionStoreTab.UPDATES -> (pkg.isInstalled || pkg.localApkPath.isNotBlank()) && pkg.hasUpdate
                 ExtensionStoreTab.REPOSITORIES -> true
             }
@@ -244,7 +262,7 @@ class SourcesViewModel(
                         pkg.compatibilityStatus == ExtensionCompatibilityStatus.UNTRUSTED_REPO.name ||
                         pkg.compatibilityStatus == ExtensionCompatibilityStatus.MIHON_LOAD_FAILED.name
             }
-            fromEnabledRepo && matchesQuery && matchesLang && matchesRepo && matchesSubTab && matchesCompat
+            matchesQuery && matchesLang && matchesRepo && matchesSubTab && matchesCompat
         }.let { list ->
             when (local.extSort) {
                 ExtensionSortOption.NAME -> list.sortedBy { it.name.lowercase() }
@@ -279,6 +297,10 @@ class SourcesViewModel(
             selectedCategoryFilter = local.categoryFilter,
             repos = extSnap.repos,
             packages = filteredPkgs,
+            totalIndexedPackagesCount = enabledRepoPackages.size,
+            installedPackagesCount = enabledRepoPackages.count { it.isInstalled },
+            notInstalledPackagesCount = enabledRepoPackages.count { !it.isInstalled },
+            updatesPackagesCount = enabledRepoPackages.count { (it.isInstalled || it.localApkPath.isNotBlank()) && it.hasUpdate },
             allPackageLanguages = allLangs,
             extSubTab = local.extSubTab,
             extSearchQuery = local.extQuery,
@@ -359,12 +381,24 @@ class SourcesViewModel(
     }
 
     fun checkSourceAvailability() {
-        viewModelScope.launch {
-            val entries = sourceRegistry.allConfiguredSources.first().filter { it.isEnabled }
+        healthJob?.cancel()
+        healthJob = viewModelScope.launch {
+            val entries = withContext(Dispatchers.IO) {
+                sourceRegistry.allConfiguredSources.first().filter { it.isEnabled }
+            }
             val results = entries.map { entry ->
-                async {
-                    val status = runCatching { entry.adapter.checkStatus() }.getOrElse {
-                        SourceHealthStatus(isOnline = false, errorReason = NetworkErrorFormatter.describe(it))
+                async(Dispatchers.IO) {
+                    val status = try {
+                        withTimeout(15_000L) {
+                            entry.adapter.checkStatus()
+                        }
+                    } catch (ce: CancellationException) {
+                        throw ce
+                    } catch (t: Throwable) {
+                        SourceHealthStatus(
+                            isOnline = false,
+                            errorReason = NetworkErrorFormatter.describe(t)
+                        )
                     }
                     entry.adapter.id to status
                 }
@@ -428,6 +462,18 @@ class SourcesViewModel(
 
     fun updateExtSort(sort: ExtensionSortOption) {
         localUiState.update { it.copy(extSort = sort) }
+    }
+
+    fun clearExtSearchAndFilters() {
+        localUiState.update {
+            it.copy(
+                extQuery = "",
+                extSubTab = ExtensionStoreTab.ALL,
+                extLangFilter = "all",
+                extRepoFilterId = null,
+                extCompatFilter = ExtensionCompatFilter.ALL
+            )
+        }
     }
 
     fun clearBannerMessages() {
@@ -682,23 +728,27 @@ class SourcesViewModel(
             val errorsMap = linkedMapOf<String, String>()
 
             val outcomes = sources.map { source ->
-                async {
+                async(Dispatchers.IO) {
                     try {
-                        val items = source.search(query, 1, filters).items.map {
-                            MangaCardUi(
-                                id = "${it.sourceId}::${it.mangaKey}",
-                                title = it.title,
-                                altTitle = it.altTitle,
-                                coverUrl = it.coverUrl,
-                                latestChapter = it.latestChapterName,
-                                sourceName = it.sourceName,
-                                status = it.status,
-                                isDemoData = it.isDemoData
-                            )
+                        withTimeout(25_000L) {
+                            val items = source.search(query, 1, filters).items.map {
+                                MangaCardUi(
+                                    id = "${it.sourceId}::${it.mangaKey}",
+                                    title = it.title,
+                                    altTitle = it.altTitle,
+                                    coverUrl = it.coverUrl,
+                                    latestChapter = it.latestChapterName,
+                                    sourceName = it.sourceName,
+                                    status = it.status,
+                                    isDemoData = it.isDemoData
+                                )
+                            }
+                            Triple(source.name, items, null as String?)
                         }
-                        Triple(source.name, items, null as String?)
-                    } catch (e: Exception) {
-                        Triple(source.name, emptyList(), NetworkErrorFormatter.describe(e))
+                    } catch (ce: CancellationException) {
+                        throw ce
+                    } catch (t: Throwable) {
+                        Triple(source.name, emptyList(), NetworkErrorFormatter.describe(t))
                     }
                 }
             }.awaitAll()
@@ -727,18 +777,45 @@ class SourcesViewModel(
     }
 
     // Single Source Browse
-    fun initBrowseSource(sourceId: String) {
-        viewModelScope.launch {
-            val adapter = sourceRegistry.getSourceById(sourceId)
-            val prefs = runCatching { adapter?.getPreferences() ?: emptyList() }.getOrDefault(emptyList())
+    fun initBrowseSource(sourceId: String, forceReload: Boolean = false) {
+        val current = browseState.value
+        if (!forceReload && current.sourceId == sourceId && (current.items.isNotEmpty() || current.isLoading)) {
+            return
+        }
+        browseJob?.cancel()
+        browseJob = viewModelScope.launch {
+            val (adapter, prefs) = withContext(Dispatchers.IO) {
+                val resolved = sourceRegistry.getSourceById(sourceId)
+                val loadedPrefs = try {
+                    resolved?.getPreferences() ?: emptyList()
+                } catch (ce: CancellationException) {
+                    throw ce
+                } catch (_: Throwable) {
+                    emptyList()
+                }
+                resolved to loadedPrefs
+            }
+            if (adapter == null) {
+                runCatching { Log.w("KiyomiSource", "initBrowseSource: sourceId=$sourceId not active or missing") }
+                browseState.value = BrowseSourceUiState(
+                    sourceId = sourceId,
+                    sourceName = sourceId,
+                    mode = "popular",
+                    isLoading = false,
+                    error = "Source '$sourceId' is not active or failed to initialize."
+                )
+                return@launch
+            }
+            runCatching { Log.i("KiyomiSource", "Opening source browse: id=${adapter.id} name=${adapter.name}") }
             browseState.value = BrowseSourceUiState(
                 sourceId = sourceId,
-                sourceName = adapter?.name ?: sourceId,
+                sourceName = adapter.name,
                 mode = "popular",
                 preferences = prefs,
-                supportsLogin = adapter?.supportsLogin ?: false
+                supportsLogin = adapter.supportsLogin,
+                isLoading = true
             )
-            loadSourcePage(page = 1, append = false)
+            loadSourcePageInternal(page = 1, append = false)
         }
     }
 
@@ -757,49 +834,76 @@ class SourcesViewModel(
     }
 
     fun loadSourcePage(page: Int = 1, append: Boolean = false) {
-        viewModelScope.launch {
-            val current = browseState.value
-            val adapter = sourceRegistry.getSourceById(current.sourceId) ?: return@launch
-            browseState.update { it.copy(isLoading = true, error = null) }
-            try {
-                val res = when (current.mode) {
-                    "latest" -> adapter.getLatest(page, current.filters)
-                    "search" -> adapter.search(current.query, page, current.filters)
-                    else -> adapter.getPopular(page, current.filters)
+        browseJob?.cancel()
+        browseJob = viewModelScope.launch {
+            loadSourcePageInternal(page, append)
+        }
+    }
+
+    private suspend fun loadSourcePageInternal(page: Int, append: Boolean) {
+        val current = browseState.value
+        val adapter = withContext(Dispatchers.IO) {
+            sourceRegistry.getSourceById(current.sourceId)
+        }
+        if (adapter == null) {
+            browseState.update {
+                it.copy(
+                    isLoading = false,
+                    error = "Source '${current.sourceName.ifBlank { current.sourceId }}' is not active."
+                )
+            }
+            return
+        }
+        browseState.update { it.copy(isLoading = true, error = null) }
+        try {
+            val res = withContext(Dispatchers.IO) {
+                withTimeout(35_000L) {
+                    when (current.mode) {
+                        "latest" -> adapter.getLatest(page, current.filters)
+                        "search" -> adapter.search(current.query, page, current.filters)
+                        else -> adapter.getPopular(page, current.filters)
+                    }
                 }
-                val newCards = res.items.map {
-                    MangaCardUi(
-                        id = "${it.sourceId}::${it.mangaKey}",
-                        title = it.title,
-                        altTitle = it.altTitle,
-                        coverUrl = it.coverUrl,
-                        latestChapter = it.latestChapterName,
-                        sourceName = it.sourceName,
-                        status = it.status,
-                        isDemoData = it.isDemoData
-                    )
-                }
-                browseState.update {
-                    it.copy(
-                        isLoading = false,
-                        page = page,
-                        hasNextPage = res.hasNextPage,
-                        items = if (append) (it.items + newCards).distinctBy { c -> c.id } else newCards
-                    )
-                }
-            } catch (e: Exception) {
-                browseState.update {
-                    it.copy(isLoading = false, error = NetworkErrorFormatter.describe(e))
-                }
+            }
+            val newCards = res.items.map {
+                MangaCardUi(
+                    id = "${it.sourceId}::${it.mangaKey}",
+                    title = it.title,
+                    altTitle = it.altTitle,
+                    coverUrl = it.coverUrl,
+                    latestChapter = it.latestChapterName,
+                    sourceName = it.sourceName,
+                    status = it.status,
+                    isDemoData = it.isDemoData
+                )
+            }
+            browseState.update {
+                it.copy(
+                    isLoading = false,
+                    page = page,
+                    hasNextPage = res.hasNextPage,
+                    items = if (append) (it.items + newCards).distinctBy { c -> c.id } else newCards
+                )
+            }
+        } catch (ce: CancellationException) {
+            throw ce
+        } catch (t: Throwable) {
+            runCatching {
+                Log.w("KiyomiSource", "loadSourcePage failed id=${current.sourceId} mode=${current.mode} page=$page: ${t.javaClass.simpleName}: ${t.message}")
+            }
+            browseState.update {
+                it.copy(isLoading = false, error = NetworkErrorFormatter.describe(t))
             }
         }
     }
 
     fun updateSourcePreference(key: String, value: String) {
         viewModelScope.launch {
-            val adapter = sourceRegistry.getSourceById(browseState.value.sourceId) ?: return@launch
-            adapter.updatePreference(key, value)
-            val refreshed = adapter.getPreferences()
+            val refreshed = withContext(Dispatchers.IO) {
+                val adapter = sourceRegistry.getSourceById(browseState.value.sourceId) ?: return@withContext null
+                adapter.updatePreference(key, value)
+                runCatching { adapter.getPreferences() }.getOrDefault(emptyList())
+            } ?: return@launch
             browseState.update { it.copy(preferences = refreshed) }
             loadSourcePage(1, append = false)
         }
@@ -807,40 +911,46 @@ class SourcesViewModel(
 
     fun loginToSource(username: String, credential: String) {
         viewModelScope.launch {
-            val adapter = sourceRegistry.getSourceById(browseState.value.sourceId) ?: return@launch
-            val res = adapter.login(username, credential)
-            val msg = when (res) {
-                is SourceSessionResult.Authenticated -> "Signed in as ${res.username} (${res.note})"
-                is SourceSessionResult.Failed -> "Login failed: ${res.reason}"
-                is SourceSessionResult.Unsupported -> res.reason
-            }
-            val refreshed = adapter.getPreferences()
-            browseState.update { it.copy(loginFeedback = msg, preferences = refreshed) }
+            val outcome = withContext(Dispatchers.IO) {
+                val adapter = sourceRegistry.getSourceById(browseState.value.sourceId) ?: return@withContext null
+                val res = adapter.login(username, credential)
+                val msg = when (res) {
+                    is SourceSessionResult.Authenticated -> "Signed in as ${res.username} (${res.note})"
+                    is SourceSessionResult.Failed -> "Login failed: ${res.reason}"
+                    is SourceSessionResult.Unsupported -> res.reason
+                }
+                val refreshed = runCatching { adapter.getPreferences() }.getOrDefault(emptyList())
+                msg to refreshed
+            } ?: return@launch
+            browseState.update { it.copy(loginFeedback = outcome.first, preferences = outcome.second) }
         }
     }
 
     fun openSourceManga(card: MangaCardUi, onReady: (String) -> Unit) {
         viewModelScope.launch {
-            val existing = mangaRepo.observeManga(card.id).first()
+            val existing = withContext(Dispatchers.IO) {
+                mangaRepo.observeManga(card.id).first()
+            }
             if (existing != null) {
                 onReady(existing.id)
                 return@launch
             }
             val sourceId = card.id.substringBefore("::")
             val mangaKey = card.id.substringAfter("::")
-            val adapter = sourceRegistry.getSourceById(sourceId)
-            val detail = runCatching { adapter?.getMangaDetails(mangaKey) }.getOrNull()
-                ?: SourceMangaItem(
-                    sourceId = sourceId,
-                    sourceName = card.sourceName,
-                    mangaKey = mangaKey,
-                    title = card.title,
-                    altTitle = card.altTitle,
-                    coverUrl = card.coverUrl,
-                    status = card.status,
-                    isDemoData = card.isDemoData
-                )
-            val cached = mangaRepo.cacheSourceManga(detail)
+            val summary = SourceMangaItem(
+                sourceId = sourceId,
+                sourceName = card.sourceName,
+                mangaKey = mangaKey,
+                title = card.title,
+                altTitle = card.altTitle,
+                coverUrl = card.coverUrl,
+                latestChapterName = card.latestChapter,
+                status = card.status,
+                isDemoData = card.isDemoData
+            )
+            val cached = withContext(Dispatchers.IO) {
+                mangaRepo.cacheSourceManga(summary)
+            }
             onReady(cached.id)
         }
     }

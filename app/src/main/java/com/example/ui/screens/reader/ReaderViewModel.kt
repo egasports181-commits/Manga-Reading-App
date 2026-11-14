@@ -1,6 +1,7 @@
 package com.example.ui.screens.reader
 
 import android.content.Context
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -14,8 +15,13 @@ import com.example.data.repository.MangaRepository
 import com.example.domain.model.*
 import com.example.network.NetworkErrorFormatter
 import com.example.source.SourceRegistry
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import okhttp3.Headers.Companion.toHeaders
 
 data class ReaderUiState(
@@ -62,6 +68,7 @@ class ReaderViewModel(
     private val currentChapterId = MutableStateFlow(initialChapterId)
     private val loadState = MutableStateFlow(LoadCache())
     private var sessionStartMs = System.currentTimeMillis()
+    private var loadChapterJob: Job? = null
 
     private data class LoadCache(
         val pages: List<SourcePage> = emptyList(),
@@ -131,37 +138,51 @@ class ReaderViewModel(
     fun loadChapter(chapterId: String) {
         currentChapterId.value = chapterId
         sessionStartMs = System.currentTimeMillis()
-        viewModelScope.launch {
+        loadChapterJob?.cancel()
+        loadChapterJob = viewModelScope.launch {
             loadState.value = LoadCache(isLoading = true)
             try {
-                val chapters = mangaRepo.observeChapters(mangaId).first()
-                val chapter = chapters.firstOrNull { it.id == chapterId }
-                    ?: throw IllegalStateException("Chapter not found")
-                val manga = mangaRepo.observeManga(mangaId).first()
-                    ?: throw IllegalStateException("Manga not found")
+                val loaded = withContext(Dispatchers.IO) {
+                    withTimeout(35_000L) {
+                        val chapters = mangaRepo.observeChapters(mangaId).first()
+                        val chapter = chapters.firstOrNull { it.id == chapterId }
+                            ?: throw IllegalStateException("Chapter not found")
+                        val manga = mangaRepo.observeManga(mangaId).first()
+                            ?: throw IllegalStateException("Manga not found")
 
-                val offlinePages = downloadRepo.getOfflinePages(chapter)
-                val pages = if (offlinePages != null) {
-                    offlinePages
-                } else {
-                    val source = sourceRegistry.getSourceById(manga.sourceId)
-                        ?: throw IllegalStateException("Source '${manga.sourceName}' unavailable")
-                    source.getChapterPages(chapter.chapterKey)
+                        val offlinePages = downloadRepo.getOfflinePages(chapter)
+                        val pages = if (offlinePages != null) {
+                            offlinePages
+                        } else {
+                            val source = sourceRegistry.getSourceById(manga.sourceId)
+                                ?: throw IllegalStateException("Source '${manga.sourceName}' unavailable")
+                            source.getChapterPages(chapter.chapterKey)
+                        }
+                        Triple(chapter, pages, offlinePages != null)
+                    }
                 }
-
+                val (chapter, pages, isOffline) = loaded
                 val resumePage = chapter.lastPageRead.coerceIn(0, (pages.size - 1).coerceAtLeast(0))
+                runCatching {
+                    Log.d("KiyomiReader", "Loaded chapterId=$chapterId pages=${pages.size} offline=$isOffline")
+                }
                 loadState.value = LoadCache(
                     pages = pages,
                     currentPage = resumePage,
                     isLoading = false,
                     error = if (pages.isEmpty()) "No pages available for this chapter." else null,
-                    isOffline = offlinePages != null
+                    isOffline = isOffline
                 )
                 prefetchAround(resumePage, pages)
-            } catch (e: Exception) {
+            } catch (ce: CancellationException) {
+                throw ce
+            } catch (t: Throwable) {
+                runCatching {
+                    Log.w("KiyomiReader", "Failed loading chapterId=$chapterId (${t.javaClass.simpleName}): ${t.message}")
+                }
                 loadState.value = LoadCache(
                     isLoading = false,
-                    error = NetworkErrorFormatter.describe(e)
+                    error = NetworkErrorFormatter.describe(t)
                 )
             }
         }

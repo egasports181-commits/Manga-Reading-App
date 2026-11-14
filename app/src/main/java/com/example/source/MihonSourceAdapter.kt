@@ -1,5 +1,6 @@
 package com.example.source
 
+import android.util.Log
 import com.example.domain.model.*
 import com.example.network.NetworkErrorFormatter
 import eu.kanade.tachiyomi.network.GET
@@ -13,8 +14,10 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 
@@ -30,18 +33,24 @@ class MihonSourceAdapter(
     private val httpClient: OkHttpClient
 ) : MangaSourceAdapter {
 
-    val mihonSourceId: Long = mihonSource.id
+    val mihonSourceId: Long = runCatching { mihonSource.id }
+        .getOrElse { mihonSource.name.hashCode().toLong() and 0x7FFFFFFFL }
 
-    override val id: String = "mihon_${mihonSource.id}"
-    override val name: String = mihonSource.name
-    override val language: String = mihonSource.lang.ifBlank { "all" }
+    override val id: String = "mihon_$mihonSourceId"
+    override val name: String = runCatching { mihonSource.name }.getOrDefault(extensionPackageName)
+    override val language: String = runCatching { mihonSource.lang.ifBlank { "all" } }.getOrDefault("all")
     override val category: String = "Mihon Extension"
-    override val baseUrl: String = (mihonSource as? HttpSource)?.baseUrl.orEmpty()
-    override val supportsFilters: Boolean = (mihonSource as? CatalogueSource)?.getFilterList()?.isNotEmpty() == true
+    override val baseUrl: String by lazy {
+        runCatching { (mihonSource as? HttpSource)?.baseUrl.orEmpty() }.getOrDefault("")
+    }
+    override val supportsFilters: Boolean by lazy {
+        runCatching { (mihonSource as? CatalogueSource)?.getFilterList()?.isNotEmpty() == true }
+            .getOrDefault(false)
+    }
     override val supportsLogin: Boolean = false
 
     private val sourceHeadersMap: Map<String, String> by lazy {
-        val hdrs = (mihonSource as? HttpSource)?.headers ?: return@lazy emptyMap()
+        val hdrs = runCatching { (mihonSource as? HttpSource)?.headers }.getOrNull() ?: return@lazy emptyMap()
         buildMap {
             for (i in 0 until hdrs.size) {
                 put(hdrs.name(i), hdrs.value(i))
@@ -53,36 +62,78 @@ class MihonSourceAdapter(
 
     override suspend fun checkStatus(): SourceHealthStatus = withContext(Dispatchers.IO) {
         val httpSrc = mihonSource as? HttpSource
-        val targetUrl = httpSrc?.baseUrl?.trim().orEmpty()
+        val targetUrl = runCatching { httpSrc?.baseUrl?.trim().orEmpty() }.getOrDefault("")
         if (targetUrl.isBlank()) {
             return@withContext SourceHealthStatus(isOnline = true, latencyMs = 1L)
         }
         val start = System.currentTimeMillis()
         try {
-            val req = GET(targetUrl, httpSrc?.headers ?: okhttp3.Headers.Builder().build())
-            val client = httpSrc?.client ?: httpClient
-            client.newCall(req).await().use { resp ->
-                val elapsed = (System.currentTimeMillis() - start).coerceAtLeast(1L)
-                SourceHealthStatus(
-                    isOnline = resp.code < 500,
-                    latencyMs = elapsed,
-                    httpStatus = resp.code,
-                    errorReason = if (resp.code >= 500) "HTTP ${resp.code}" else null
-                )
+            val status = withTimeoutOrNull(12_000L) {
+                val client = httpSrc?.client ?: httpClient
+                val req = GET(targetUrl, httpSrc?.headers ?: okhttp3.Headers.Builder().build())
+                client.newCall(req).await().use { resp ->
+                    val elapsed = (System.currentTimeMillis() - start).coerceAtLeast(1L)
+                    runCatching {
+                        Log.d("KiyomiSource", "Health check [$name] host=${targetUrl.toHttpUrlOrNull()?.host} code=${resp.code} (${elapsed}ms)")
+                    }
+                    SourceHealthStatus(
+                        isOnline = resp.code < 500,
+                        latencyMs = elapsed,
+                        httpStatus = resp.code,
+                        errorReason = if (resp.code >= 500) "HTTP ${resp.code}" else null
+                    )
+                }
             }
-        } catch (e: Exception) {
+            status ?: SourceHealthStatus(
+                isOnline = false,
+                latencyMs = (System.currentTimeMillis() - start).coerceAtLeast(1L),
+                errorReason = "Timed out checking source availability"
+            )
+        } catch (ce: CancellationException) {
+            throw ce
+        } catch (t: Throwable) {
+            runCatching {
+                Log.w("KiyomiSource", "Health check failed [$name] (${t.javaClass.simpleName}): ${t.message}")
+            }
             SourceHealthStatus(
                 isOnline = false,
                 latencyMs = (System.currentTimeMillis() - start).coerceAtLeast(1L),
-                errorReason = NetworkErrorFormatter.describe(e, targetUrl.toHttpUrlOrNull()?.host)
+                errorReason = NetworkErrorFormatter.describe(t, targetUrl.toHttpUrlOrNull()?.host)
             )
         }
     }
 
+    private suspend inline fun <T> guardExtensionCall(
+        operation: String,
+        crossinline block: suspend () -> T
+    ): T = withContext(Dispatchers.IO) {
+        val start = System.currentTimeMillis()
+        try {
+            block().also {
+                val elapsed = System.currentTimeMillis() - start
+                runCatching {
+                    Log.d("KiyomiSource", "$operation ok [$name] (${elapsed}ms)")
+                }
+            }
+        } catch (ce: CancellationException) {
+            throw ce
+        } catch (t: Throwable) {
+            val elapsed = System.currentTimeMillis() - start
+            runCatching {
+                Log.w("KiyomiSource", "$operation failed [$name] (${elapsed}ms): ${t.javaClass.simpleName}: ${t.message}")
+            }
+            if (t is Exception) {
+                throw t
+            } else {
+                throw IllegalStateException("Extension '$name' failure during $operation: ${t.javaClass.simpleName}: ${t.message ?: "unknown"}", t)
+            }
+        }
+    }
+
     override suspend fun getPopular(page: Int, filters: SearchFilters): SourcePagedResult =
-        withContext(Dispatchers.IO) {
+        guardExtensionCall("popular(page=$page)") {
             val cat = mihonSource as? CatalogueSource
-                ?: return@withContext SourcePagedResult(emptyList(), false)
+                ?: return@guardExtensionCall SourcePagedResult(emptyList(), false)
             val result = cat.getPopularManga(page)
             SourcePagedResult(
                 items = result.mangas.map { it.toSourceMangaItem() },
@@ -91,9 +142,9 @@ class MihonSourceAdapter(
         }
 
     override suspend fun getLatest(page: Int, filters: SearchFilters): SourcePagedResult =
-        withContext(Dispatchers.IO) {
+        guardExtensionCall("latest(page=$page)") {
             val cat = mihonSource as? CatalogueSource
-                ?: return@withContext SourcePagedResult(emptyList(), false)
+                ?: return@guardExtensionCall SourcePagedResult(emptyList(), false)
             val result = if (cat.supportsLatest) {
                 cat.getLatestUpdates(page)
             } else {
@@ -106,9 +157,9 @@ class MihonSourceAdapter(
         }
 
     override suspend fun search(query: String, page: Int, filters: SearchFilters): SourcePagedResult =
-        withContext(Dispatchers.IO) {
+        guardExtensionCall("search(page=$page)") {
             val cat = mihonSource as? CatalogueSource
-                ?: return@withContext SourcePagedResult(emptyList(), false)
+                ?: return@guardExtensionCall SourcePagedResult(emptyList(), false)
             val filterList = runCatching { cat.getFilterList() }.getOrDefault(FilterList())
             val result = cat.getSearchManga(page, query, filterList)
             SourcePagedResult(
@@ -118,7 +169,7 @@ class MihonSourceAdapter(
         }
 
     override suspend fun getMangaDetails(mangaKey: String): SourceMangaItem =
-        withContext(Dispatchers.IO) {
+        guardExtensionCall("details") {
             val input = SManga.create().apply {
                 url = mangaKey
                 title = mangaKey
@@ -127,7 +178,7 @@ class MihonSourceAdapter(
         }
 
     override suspend fun getChapters(mangaKey: String): List<SourceChapter> =
-        withContext(Dispatchers.IO) {
+        guardExtensionCall("chapters") {
             val input = SManga.create().apply {
                 url = mangaKey
                 title = mangaKey
@@ -150,7 +201,7 @@ class MihonSourceAdapter(
         }
 
     override suspend fun getChapterPages(chapterKey: String): List<SourcePage> =
-        withContext(Dispatchers.IO) {
+        guardExtensionCall("pages") {
             val chapter = SChapter.create().apply {
                 url = chapterKey
                 name = chapterKey
@@ -180,21 +231,27 @@ class MihonSourceAdapter(
         }
 
     override suspend fun getPreferences(): List<SourcePreferenceItem> = withContext(Dispatchers.IO) {
-        val cfg = mihonSource as? ConfigurableSource ?: return@withContext emptyList()
-        val prefs = cfg.getSourcePreferences()
-        prefs.all.entries.map { (k, v) ->
-            SourcePreferenceItem(
-                key = k,
-                title = k.replace('_', ' ').replaceFirstChar { it.uppercase() },
-                summary = "Mihon source preference ($extensionPackageName)",
-                currentValue = v?.toString().orEmpty()
-            )
-        }
+        runCatching {
+            val cfg = mihonSource as? ConfigurableSource ?: return@withContext emptyList()
+            val prefs = cfg.getSourcePreferences()
+            prefs.all.entries.map { (k, v) ->
+                SourcePreferenceItem(
+                    key = k,
+                    title = k.replace('_', ' ').replaceFirstChar { it.uppercase() },
+                    summary = "Mihon source preference ($extensionPackageName)",
+                    currentValue = v?.toString().orEmpty()
+                )
+            }
+        }.getOrDefault(emptyList())
     }
 
     override suspend fun updatePreference(key: String, value: String) {
-        val cfg = mihonSource as? ConfigurableSource ?: return
-        cfg.getSourcePreferences().edit().putString(key, value).apply()
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val cfg = mihonSource as? ConfigurableSource ?: return@withContext
+                cfg.getSourcePreferences().edit().putString(key, value).apply()
+            }
+        }
     }
 
     private fun extractImageHeaders(httpSrc: HttpSource?, page: Page): Map<String, String> {
