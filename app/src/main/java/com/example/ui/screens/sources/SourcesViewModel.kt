@@ -55,9 +55,9 @@ enum class ExtensionStoreTab(val label: String) {
 
 enum class ExtensionCompatFilter(val label: String) {
     ALL("All Formats"),
-    EXECUTABLE("Executable Only"),
-    VERIFIED_APK("Mihon APK"),
-    ISSUES("Warnings / Errors")
+    EXECUTABLE("Compatible (Koma)"),
+    VERIFIED_APK("Downloaded & Verified"),
+    ISSUES("Unsupported / Issues")
 }
 
 data class SourcesUiState(
@@ -212,15 +212,18 @@ class SourcesViewModel(
             val matchesRepo = local.extRepoFilterId == null || pkg.repoId == local.extRepoFilterId
             val matchesSubTab = when (local.extSubTab) {
                 ExtensionStoreTab.ALL -> true
-                ExtensionStoreTab.INSTALLED -> pkg.isInstalled || pkg.localApkPath.isNotBlank()
+                ExtensionStoreTab.INSTALLED -> pkg.isInstalled
                 ExtensionStoreTab.UPDATES -> (pkg.isInstalled || pkg.localApkPath.isNotBlank()) && pkg.hasUpdate
                 ExtensionStoreTab.REPOSITORIES -> true
             }
             val matchesCompat = when (local.extCompatFilter) {
                 ExtensionCompatFilter.ALL -> true
-                ExtensionCompatFilter.EXECUTABLE -> pkg.format == ExtensionFormat.KOMA_JSON_ADAPTER.id
-                ExtensionCompatFilter.VERIFIED_APK -> pkg.format != ExtensionFormat.KOMA_JSON_ADAPTER.id
-                ExtensionCompatFilter.ISSUES -> !pkg.installError.isNullOrBlank() ||
+                ExtensionCompatFilter.EXECUTABLE ->
+                    pkg.format == ExtensionFormat.KOMA_JSON_ADAPTER.id &&
+                        pkg.compatibilityStatus == ExtensionCompatibilityStatus.EXECUTABLE_KOMA_JSON.name
+                ExtensionCompatFilter.VERIFIED_APK -> pkg.localApkPath.isNotBlank() && !pkg.isInstalled
+                ExtensionCompatFilter.ISSUES -> pkg.format != ExtensionFormat.KOMA_JSON_ADAPTER.id ||
+                    !pkg.installError.isNullOrBlank() ||
                     pkg.compatibilityStatus == ExtensionCompatibilityStatus.SIGNATURE_MISMATCH.name ||
                     pkg.compatibilityStatus == ExtensionCompatibilityStatus.LIB_VERSION_INCOMPATIBLE.name ||
                     pkg.compatibilityStatus == ExtensionCompatibilityStatus.UNTRUSTED_REPO.name
@@ -486,7 +489,10 @@ class SourcesViewModel(
                 val res = extRepo.downloadAndVerifyMihonApk(pkg)
                 localUiState.update {
                     if (res.isSuccess) {
-                        it.copy(statusMsg = "Downloaded & SHA-256 verified ${pkg.name} APK (${res.getOrNull()?.libVersion}). In-app DEX execution stays restricted per Play & security rules.")
+                        val verifiedPkg = res.getOrNull()
+                        it.copy(
+                            statusMsg = "Downloaded & SHA-256 verified ${pkg.name} APK (${verifiedPkg?.libVersion ?: pkg.libVersion}). Reported as UNSUPPORTED (native DEX APK, not installed/active per Play & security rules)."
+                        )
                     } else {
                         it.copy(errorMsg = res.exceptionOrNull()?.message ?: "APK verification failed.")
                     }

@@ -181,6 +181,7 @@ class ExtensionRepositoryManager(
 
     suspend fun refreshRepository(repo: ExtensionRepoEntity): Result<Int> = withContext(Dispatchers.IO) {
         var lastHttpStatus: Int? = null
+        var responseContentType: String? = null
         try {
             val request = Request.Builder()
                 .url(repo.indexUrl)
@@ -190,26 +191,31 @@ class ExtensionRepositoryManager(
 
             val rawBytes = httpClient.newCall(request).execute().use { resp ->
                 lastHttpStatus = resp.code
+                responseContentType = resp.header("Content-Type")
                 if (!resp.isSuccessful) {
-                    throw IOException("Repository returned HTTP ${resp.code}")
+                    throw IOException("Repository '${repo.indexUrl}' returned HTTP ${resp.code} (${responseContentType ?: "no content-type"})")
                 }
-                resp.body?.bytes() ?: throw IOException("Empty repository index response")
+                resp.body?.bytes() ?: throw IOException("Empty repository index response from '${repo.indexUrl}'")
             }
 
             val parsedIndex = ExtensionIndexParser.parseIndexBytes(
                 repoId = repo.id,
                 indexUrl = repo.indexUrl,
-                rawBytes = rawBytes
+                rawBytes = rawBytes,
+                contentType = responseContentType
             )
             val indexDigest = ExtensionIndexParser.sha256Hex(rawBytes)
             val companionMeta = fetchCompanionRepoJson(repo.indexUrl)
 
             val resolvedFingerprint = repo.signingKeyFingerprint.ifBlank {
-                companionMeta?.signingKeyFingerprint.orEmpty()
+                parsedIndex.repoFingerprint?.ifBlank { null }
+                    ?: companionMeta?.signingKeyFingerprint.orEmpty()
             }
-            val fingerprintMatches = resolvedFingerprint.isBlank() ||
+            val actualFingerprint = parsedIndex.repoFingerprint?.ifBlank { null }
+                ?: companionMeta?.signingKeyFingerprint.orEmpty()
+            val fingerprintMatches = actualFingerprint.isBlank() ||
                 repo.signingKeyFingerprint.isBlank() ||
-                ExtensionSecurityManager.fingerprintsMatch(repo.signingKeyFingerprint, resolvedFingerprint)
+                ExtensionSecurityManager.fingerprintsMatch(repo.signingKeyFingerprint, actualFingerprint)
 
             val existingPackagesById = extensionDao.getPackagesOnce().associateBy { it.pkgId }
             val merged = parsedIndex.packages.map { incoming ->
@@ -217,7 +223,8 @@ class ExtensionRepositoryManager(
                     format = ExtensionFormat.fromId(incoming.format),
                     versionName = incoming.versionName,
                     isRepoTrusted = repo.isTrusted && fingerprintMatches,
-                    signatureMatch = fingerprintMatches
+                    signatureMatch = fingerprintMatches,
+                    explicitLibVersion = incoming.libVersion.takeIf { it.isNotBlank() }
                 )
                 val existing = existingPackagesById[incoming.pkgId]
                 if (existing != null && (existing.isInstalled || existing.localApkPath.isNotBlank())) {
@@ -268,7 +275,9 @@ class ExtensionRepositoryManager(
                 repo.copy(
                     name = resolvedDisplayName,
                     displayName = resolvedDisplayName,
-                    website = companionMeta?.website?.takeIf { it.isNotBlank() } ?: repo.website,
+                    website = companionMeta?.website?.takeIf { it.isNotBlank() }
+                        ?: parsedIndex.repoWebsite?.takeIf { it.isNotBlank() }
+                        ?: repo.website,
                     iconUrl = companionMeta?.iconUrl?.takeIf { it.isNotBlank() } ?: repo.iconUrl,
                     signingKeyFingerprint = resolvedFingerprint.ifBlank { indexDigest.take(16) },
                     isTrusted = fingerprintMatches && repo.isTrusted,
@@ -282,7 +291,11 @@ class ExtensionRepositoryManager(
             )
             Result.success(merged.size)
         } catch (e: Exception) {
-            val formatted = NetworkErrorFormatter.describe(e, repo.indexUrl.toHttpUrlOrNull()?.host)
+            val formatted = if (e is IllegalArgumentException && e.message?.isNotBlank() == true) {
+                e.message!!
+            } else {
+                NetworkErrorFormatter.describe(e, repo.indexUrl.toHttpUrlOrNull()?.host)
+            }
             extensionDao.upsertRepo(
                 repo.copy(
                     lastRefreshedAt = System.currentTimeMillis(),

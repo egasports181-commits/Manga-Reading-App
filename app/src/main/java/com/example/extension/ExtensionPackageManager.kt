@@ -34,9 +34,16 @@ class ExtensionPackageManager(
 
     suspend fun installKomaAdapter(pkg: ExtensionPackageEntity): Result<Unit> {
         if (pkg.format != ExtensionFormat.KOMA_JSON_ADAPTER.id) {
-            val msg = "Mihon/Tachiyomi APK plugins cannot execute DEX code inside Koma's sandboxed runtime. Inspect or verify the APK instead."
+            val msg = "Native Mihon/Tachiyomi APKs cannot execute DEX code inside Koma's sandboxed runtime. Verify the APK or use a koma_json_v1 manifest instead."
             recordHistory(pkg, "INSTALL", "REJECTED", msg)
             return Result.failure(UnsupportedOperationException(msg))
+        }
+        val manifestCheck = KomaManifestValidator.validateJsonString(pkg.adapterJson)
+        if (!manifestCheck.isValid) {
+            val msg = manifestCheck.errorReason ?: "Invalid koma_json_v1 declarative manifest."
+            recordHistory(pkg, "INSTALL", "FAILED", msg)
+            extensionDao.upsertPackage(pkg.copy(installError = msg, updatedAt = System.currentTimeMillis()))
+            return Result.failure(IllegalArgumentException(msg))
         }
         val repo = pkg.repoId?.let { extensionDao.getRepoById(it) }
         if (repo != null && !repo.isTrusted) {
@@ -52,19 +59,19 @@ class ExtensionPackageManager(
             versionName = pkg.latestVersionName.ifBlank { pkg.versionName },
             hasUpdate = false,
             compatibilityStatus = ExtensionCompatibilityStatus.EXECUTABLE_KOMA_JSON.name,
-            compatibilityReason = "Installed and active inside Koma's declarative JSON sandbox.",
+            compatibilityReason = "Compatible, installed, and active inside Koma's declarative JSON sandbox (koma_json_v1).",
             installError = null,
             updatedAt = System.currentTimeMillis()
         )
         extensionDao.upsertPackage(installed)
-        recordHistory(installed, "INSTALL", "SUCCESS", "Activated Koma declarative source v${installed.versionName}")
+        recordHistory(installed, "INSTALL", "ACTIVE", "Activated Koma declarative source v${installed.versionName}")
         return Result.success(Unit)
     }
 
     /**
      * Downloads a Mihon APK over HTTPS into `filesDir/extensions_cache/`, computes SHA-256,
      * inspects manifest + signing certificate against repo fingerprint, and persists verified audit metadata.
-     * Does NOT execute downloaded DEX/APK bytecode.
+     * NEVER sets `isInstalled = true` and NEVER loads or executes DEX/APK bytecode.
      */
     suspend fun downloadAndVerifyMihonApk(pkg: ExtensionPackageEntity): Result<ExtensionPackageEntity> =
         withContext(Dispatchers.IO) {
@@ -85,6 +92,8 @@ class ExtensionPackageManager(
                 recordHistory(pkg, "VERIFY_APK", "BLOCKED", msg)
                 extensionDao.upsertPackage(
                     pkg.copy(
+                        isInstalled = false,
+                        isEnabled = false,
                         compatibilityStatus = ExtensionCompatibilityStatus.UNTRUSTED_REPO.name,
                         compatibilityReason = msg,
                         installError = msg
@@ -155,10 +164,13 @@ class ExtensionPackageManager(
                     format = ExtensionFormat.fromId(pkg.format),
                     versionName = apkAudit?.versionName?.ifBlank { pkg.versionName } ?: pkg.versionName,
                     isRepoTrusted = repo?.isTrusted ?: true,
-                    signatureMatch = sigMatches
+                    signatureMatch = sigMatches,
+                    explicitLibVersion = pkg.libVersion.takeIf { it.isNotBlank() }
                 )
 
                 val verified = pkg.copy(
+                    isInstalled = false,
+                    isEnabled = false,
                     localApkPath = destFile.absolutePath,
                     signatureHash = fileSha.take(16),
                     installedSignatureSha256 = actualSig,
@@ -167,11 +179,11 @@ class ExtensionPackageManager(
                     libVersion = compat.libVersion,
                     compatibilityStatus = compat.status.name,
                     compatibilityReason = buildString {
+                        append("Downloaded & SHA-256 verified (${fileSha.take(16)}…). ")
                         append(compat.reason)
                         if (apkAudit?.extensionClass?.isNotBlank() == true) {
                             append(" Entry class: ${apkAudit.extensionClass}.")
                         }
-                        append(" File SHA-256: ${fileSha.take(16)}…")
                     },
                     installError = if (compat.status == ExtensionCompatibilityStatus.SIGNATURE_MISMATCH) {
                         compat.reason
@@ -182,7 +194,7 @@ class ExtensionPackageManager(
                 recordHistory(
                     verified,
                     action = "VERIFY_APK",
-                    outcome = if (sigMatches) "VERIFIED" else "SIGNATURE_MISMATCH",
+                    outcome = if (sigMatches) "VERIFIED_UNSUPPORTED_RUNTIME" else "SIGNATURE_MISMATCH",
                     details = verified.compatibilityReason
                 )
                 _downloadProgress.update { it - pkg.pkgId }
@@ -208,6 +220,26 @@ class ExtensionPackageManager(
         }
         extensionDao.uninstallPackage(pkgId)
         if (existing != null) {
+            if (existing.format != ExtensionFormat.KOMA_JSON_ADAPTER.id) {
+                val compat = ExtensionCompatibilityResolver.evaluateMetadata(
+                    format = ExtensionFormat.fromId(existing.format),
+                    versionName = existing.versionName,
+                    isRepoTrusted = true,
+                    signatureMatch = true,
+                    explicitLibVersion = existing.libVersion.takeIf { it.isNotBlank() }
+                )
+                extensionDao.upsertPackage(
+                    existing.copy(
+                        isInstalled = false,
+                        hasUpdate = false,
+                        localApkPath = "",
+                        installedSignatureSha256 = "",
+                        installError = null,
+                        compatibilityStatus = compat.status.name,
+                        compatibilityReason = compat.reason
+                    )
+                )
+            }
             recordHistory(existing, "UNINSTALL", "SUCCESS", "Removed ${existing.name}")
         }
     }

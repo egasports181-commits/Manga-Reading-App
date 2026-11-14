@@ -8,16 +8,20 @@ import androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory
 import androidx.test.core.app.ApplicationProvider
 import com.example.data.local.db.KomaDatabase
 import com.example.data.local.entity.ChapterEntity
+import com.example.data.local.entity.ExtensionPackageEntity
 import com.example.data.local.entity.MangaEntity
 import com.example.data.preferences.AppPreferencesRepository
 import com.example.data.repository.MangaRepository
 import com.example.domain.model.ExtensionCompatibilityStatus
 import com.example.domain.model.ExtensionFormat
+import com.example.domain.model.ExtensionLifecycleState
 import com.example.domain.model.TapZoneLayout
 import com.example.extension.BuiltInRepositories
 import com.example.extension.ExtensionCompatibilityResolver
+import com.example.extension.ExtensionCompatibilityTranslator
 import com.example.extension.ExtensionIndexParser
 import com.example.extension.ExtensionRepositoryManager
+import com.example.extension.KomaManifestValidator
 import com.example.network.DnsMode
 import com.example.network.KomaDns
 import com.example.network.KomaTlsProvider
@@ -29,7 +33,12 @@ import com.example.source.SourceRegistry
 import com.example.ui.screens.reader.TapZoneAction
 import com.example.ui.screens.reader.resolveReaderTapAction
 import kotlinx.coroutines.test.runTest
+import okhttp3.Interceptor
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
+import okhttp3.Protocol
+import okhttp3.Response
+import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -283,9 +292,19 @@ class KomaUpgradeRobolectricTest {
         assertEquals("1.4", okMihon.libVersion)
         assertFalse(okMihon.canExecuteInKoma)
 
+        val v16Ok = ExtensionCompatibilityResolver.evaluateMetadata(
+            format = ExtensionFormat.MIHON_JSON_INDEX,
+            versionName = "1.6.6",
+            isRepoTrusted = true,
+            signatureMatch = true
+        )
+        assertEquals(ExtensionCompatibilityStatus.VERIFIED_MIHON_RUNTIME_RESTRICTED, v16Ok.status)
+        assertEquals("1.6", v16Ok.libVersion)
+        assertFalse(v16Ok.canExecuteInKoma)
+
         val tooNew = ExtensionCompatibilityResolver.evaluateMetadata(
             format = ExtensionFormat.MIHON_JSON_INDEX,
-            versionName = "1.6.0",
+            versionName = "1.7.0",
             isRepoTrusted = true,
             signatureMatch = true
         )
@@ -826,5 +845,286 @@ class KomaUpgradeRobolectricTest {
         assertTrue(formatted.contains("SSLProtocolException"))
         assertTrue(formatted.contains("TLSv1.3/TLSv1.2"))
         assertTrue(formatted.contains("TLSV1_ALERT_PROTOCOL_VERSION"))
+    }
+
+    private fun fieldFixed32(fieldNum: Int, value: Int): ByteArray {
+        val out = ByteArrayOutputStream()
+        out.write(encodeVarint(((fieldNum shl 3) or 5).toLong()))
+        for (i in 0..3) out.write((value ushr (i * 8)) and 0xFF)
+        return out.toByteArray()
+    }
+
+    private fun fieldFixed64(fieldNum: Int, value: Long): ByteArray {
+        val out = ByteArrayOutputStream()
+        out.write(encodeVarint(((fieldNum shl 3) or 1).toLong()))
+        for (i in 0..7) out.write(((value ushr (i * 8)) and 0xFFL).toInt())
+        return out.toByteArray()
+    }
+
+    private fun fieldGroup(fieldNum: Int, innerBytes: ByteArray): ByteArray {
+        val out = ByteArrayOutputStream()
+        out.write(encodeVarint(((fieldNum shl 3) or 3).toLong()))
+        out.write(innerBytes)
+        out.write(encodeVarint(((fieldNum shl 3) or 4).toLong()))
+        return out.toByteArray()
+    }
+
+    @Test
+    fun `keiyoushi index_v2 gzipped protobuf decodes repo header artifacts sources and groups cleanly`() {
+        val sourcePayload = ByteArrayOutputStream().apply {
+            write(fieldVarint(1, 5724751873601868259L))
+            write(fieldString(2, "包子漫画"))
+            write(fieldString(3, "zh"))
+            write(fieldString(4, "https://cn.baozimh.com"))
+            write(fieldString(5, "https://tw.baozimh.com"))
+        }.toByteArray()
+
+        val artifactsPayload = ByteArrayOutputStream().apply {
+            write(fieldString(1, "https://github.com/keiyoushi/extensions/releases/download/b035310-3/tachiyomi-zh.baozimanhua-v1.6.33.apk"))
+            write(fieldString(2, "https://cdn.jsdelivr.net/gh/keiyoushi/extensions-source@main/src/zh/baozimanhua/res/mipmap-xhdpi/ic_launcher.png"))
+            write(fieldString(501, "https://github.com/keiyoushi/extensions/releases/download/b035310-3/tachiyomi-zh.baozimanhua-v1.6.33.jar"))
+        }.toByteArray()
+
+        val extPayload = ByteArrayOutputStream().apply {
+            write(fieldString(1, "Baozi Manhua"))
+            write(fieldString(2, "eu.kanade.tachiyomi.extension.zh.baozimanhua"))
+            write(fieldBytes(3, artifactsPayload))
+            write(fieldString(4, "1.6"))
+            write(fieldVarint(5, 106033L))
+            write(fieldString(6, "1.6.33"))
+            write(fieldVarint(7, 1L)) // bit 0 = hasReadme, SFW
+            write(fieldBytes(8, sourcePayload))
+            // Unknown legacy group + fixed fields to verify wire types 0,1,2,3,4,5 don't corrupt remaining fields
+            write(fieldGroup(99, fieldVarint(1, 7L) + fieldFixed32(2, 0x12345678)))
+        }.toByteArray()
+
+        val linksPayload = ByteArrayOutputStream().apply {
+            write(fieldString(1, "https://keiyoushi.github.io"))
+            write(fieldString(2, "https://discord.gg/3FbCpdKbdY"))
+        }.toByteArray()
+
+        val wrapperPayload = fieldBytes(1, extPayload)
+        val rootV2 = ByteArrayOutputStream().apply {
+            write(fieldString(1, "Keiyoushi"))
+            write(fieldString(2, "KEI"))
+            write(fieldString(3, "9add655a78e96c4ec7a53ef89dccb557cb5d767489fac5e785d671a5a75d4da2"))
+            write(fieldBytes(4, linksPayload))
+            write(fieldFixed64(98, 999999L))
+            write(fieldBytes(101, wrapperPayload))
+        }.toByteArray()
+
+        val gzOut = ByteArrayOutputStream()
+        GZIPOutputStream(gzOut).use { it.write(rootV2) }
+
+        val parsed = ExtensionIndexParser.parseIndexBytes(
+            repoId = 1L,
+            indexUrl = "https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.pb",
+            rawBytes = gzOut.toByteArray(),
+            contentType = "application/octet-stream"
+        )
+
+        assertEquals("index.pb (v2)", parsed.formatLabel)
+        assertEquals("Keiyoushi", parsed.repoName)
+        assertEquals("KEI", parsed.repoShortName)
+        assertEquals("https://keiyoushi.github.io", parsed.repoWebsite)
+        assertEquals("9add655a78e96c4ec7a53ef89dccb557cb5d767489fac5e785d671a5a75d4da2", parsed.repoFingerprint)
+        assertEquals(1, parsed.packages.size)
+
+        val pkg = parsed.packages.first()
+        assertEquals("Baozi Manhua", pkg.name)
+        assertEquals("eu.kanade.tachiyomi.extension.zh.baozimanhua", pkg.pkgId)
+        assertEquals("zh", pkg.language)
+        assertEquals("1.6", pkg.libVersion)
+        assertEquals("1.6.33", pkg.versionName)
+        assertEquals(106033, pkg.versionCode)
+        assertTrue(pkg.hasReadme)
+        assertFalse(pkg.isNsfw)
+        assertEquals(
+            "https://github.com/keiyoushi/extensions/releases/download/b035310-3/tachiyomi-zh.baozimanhua-v1.6.33.apk",
+            pkg.apkUrl
+        )
+        assertEquals(
+            "https://cdn.jsdelivr.net/gh/keiyoushi/extensions-source@main/src/zh/baozimanhua/res/mipmap-xhdpi/ic_launcher.png",
+            pkg.iconUrl
+        )
+        assertTrue(pkg.sourcesJson.contains("https://cn.baozimh.com"))
+        assertEquals(ExtensionCompatibilityStatus.VERIFIED_MIHON_RUNTIME_RESTRICTED.name, pkg.compatibilityStatus)
+    }
+
+    @Test
+    fun `protobuf wire reader skips unknown wire types 0 1 2 3 4 5 safely and rejects malformed inputs`() {
+        // Unknown nested groups + fixed32 + fixed64 before and after valid v1 extension payload
+        val innerGroup = fieldGroup(10, fieldVarint(1, 42L) + fieldString(2, "nested"))
+        val outerGroup = fieldGroup(55, fieldFixed32(1, 123) + fieldFixed64(2, 456L) + innerGroup)
+        val extPayload = ByteArrayOutputStream().apply {
+            write(outerGroup)
+            write(fieldFixed32(44, 0xCAFE))
+            write(fieldFixed64(45, 0xDEADBEEFL))
+            write(fieldString(1, "WireSafe Source"))
+            write(fieldString(2, "eu.kanade.tachiyomi.extension.en.wiresafe"))
+            write(fieldString(3, "tachiyomi-en.wiresafe-v1.4.2.apk"))
+            write(fieldString(4, "en"))
+            write(fieldVarint(5, 4L))
+            write(fieldString(6, "1.4.2"))
+        }.toByteArray()
+
+        val rootWithUnknowns = ByteArrayOutputStream().apply {
+            write(fieldGroup(90, fieldString(1, "header-group")))
+            write(fieldBytes(1, extPayload))
+        }.toByteArray()
+
+        val ok = ExtensionIndexParser.parseIndexBytes(9L, "https://repo.example/index.pb", rootWithUnknowns)
+        assertEquals(1, ok.packages.size)
+        assertEquals("WireSafe Source", ok.packages.first().name)
+
+        // Malformed fixtures: HTML page, unclosed group (wt=3), unmatched end group (wt=4), reserved wt=6, truncated LEN
+        val htmlErr = runCatching {
+            ExtensionIndexParser.parseIndexBytes(
+                9L,
+                "https://repo.example/index.pb",
+                "<!DOCTYPE html><html><body>404</body></html>".toByteArray(),
+                contentType = "text/html"
+            )
+        }.exceptionOrNull()
+        assertNotNull(htmlErr)
+        assertTrue(htmlErr!!.message!!.contains("repo.example"))
+        assertTrue(htmlErr.message!!.contains("HTML/XML"))
+
+        val unclosedGroupBytes = byteArrayOf(((10 shl 3) or 3).toByte(), 0x08, 0x01)
+        val unclosedErr = runCatching {
+            ExtensionIndexParser.parseIndexBytes(9L, "https://repo.example/bad1.pb", unclosedGroupBytes)
+        }.exceptionOrNull()
+        assertNotNull(unclosedErr)
+        assertTrue(unclosedErr!!.message!!.contains("START_GROUP"))
+
+        val unmatchedEndGroup = byteArrayOf(((10 shl 3) or 4).toByte())
+        val unmatchedErr = runCatching {
+            ExtensionIndexParser.parseIndexBytes(9L, "https://repo.example/bad2.pb", unmatchedEndGroup)
+        }.exceptionOrNull()
+        assertNotNull(unmatchedErr)
+        assertTrue(unmatchedErr!!.message!!.contains("END_GROUP"))
+
+        val reservedWireType6 = byteArrayOf(((5 shl 3) or 6).toByte())
+        val reservedErr = runCatching {
+            ExtensionIndexParser.parseIndexBytes(9L, "https://repo.example/bad3.pb", reservedWireType6)
+        }.exceptionOrNull()
+        assertNotNull(reservedErr)
+        assertTrue(reservedErr!!.message!!.contains("wireType=6"))
+
+        val truncatedLen = byteArrayOf(0x0A, 0x50, 0x01, 0x02)
+        val truncErr = runCatching {
+            ExtensionIndexParser.parseIndexBytes(9L, "https://repo.example/bad4.pb", truncatedLen)
+        }.exceptionOrNull()
+        assertNotNull(truncErr)
+        assertTrue(truncErr!!.message!!.contains("Truncated"))
+    }
+
+    @Test
+    fun `native apk reports downloaded verified unsupported cleanly while koma_json_v1 translates into working source adapter`() = runTest {
+        // 1) Native APK (BaoziManhuaPlus 1.6.6) must report Downloaded + Verified + Unsupported, NEVER Installed/Active
+        val nativeVerifiedApk = ExtensionPackageEntity(
+            pkgId = "eu.kanade.tachiyomi.extension.zh.baozimanhuaplus",
+            name = "BaoziManhuaPlus",
+            versionName = "1.6.6",
+            versionCode = 6,
+            language = "zh",
+            format = ExtensionFormat.MIHON_JSON_INDEX.id,
+            localApkPath = "/data/user/0/com.aistudio.koma/files/extensions_cache/baozi.apk",
+            signatureHash = "abcd1234abcd1234",
+            libVersion = "1.6",
+            compatibilityStatus = ExtensionCompatibilityStatus.VERIFIED_MIHON_RUNTIME_RESTRICTED.name,
+            isInstalled = false,
+            isEnabled = false
+        )
+        val nativeLifecycle = ExtensionCompatibilityResolver.resolveLifecycle(nativeVerifiedApk)
+        assertTrue(nativeLifecycle.isDownloaded)
+        assertTrue(nativeLifecycle.isVerified)
+        assertFalse(nativeLifecycle.isCompatible)
+        assertTrue(nativeLifecycle.isUnsupported)
+        assertFalse(nativeLifecycle.isActive)
+        assertEquals(ExtensionLifecycleState.VERIFIED, nativeLifecycle.primaryState)
+        assertTrue(ExtensionCompatibilityTranslator.translateToSourceAdapter(nativeVerifiedApk, OkHttpClient()).isFailure)
+
+        // 2) Declarative koma_json_v1 manifest translates cleanly into working MangaSourceAdapter (search, details, chapters, pages)
+        val cleartextCheck = KomaManifestValidator.validateJsonString("""{"baseUrl":"http://insecure.example","popularEndpoint":"/popular"}""")
+        assertFalse(cleartextCheck.isValid)
+
+        val manifestJson = """
+            {
+              "id": "koma.test.baozi_mirror",
+              "name": "Koma Mirror Catalog",
+              "versionCode": 1,
+              "versionName": "1.0.0",
+              "lang": "en",
+              "adapter": {
+                "baseUrl": "https://mirror.example.org",
+                "popularEndpoint": "/api/popular?page={page}",
+                "searchEndpoint": "/api/search?q={query}&page={page}",
+                "detailsEndpoint": "/api/manga/{id}",
+                "chaptersEndpoint": "/api/manga/{id}/chapters",
+                "pagesEndpoint": "/api/chapter/{chapterId}/pages",
+                "itemsPath": "data.items",
+                "idField": "id",
+                "titleField": "meta.title",
+                "coverField": "meta.cover",
+                "authorField": "meta.author",
+                "chaptersPath": "chapters",
+                "pagesPath": "pages",
+                "pageUrlField": "url"
+              }
+            }
+        """.trimIndent()
+        val parsed = ExtensionIndexParser.parseIndexBytes(
+            repoId = 20L,
+            indexUrl = "https://mirror.example.org/manifest.json",
+            rawBytes = manifestJson.toByteArray()
+        )
+        assertEquals("koma_json_v1", parsed.formatLabel)
+        assertEquals(1, parsed.packages.size)
+
+        val komaPkg = parsed.packages.first().copy(isInstalled = true, isEnabled = true)
+        val komaLifecycle = ExtensionCompatibilityResolver.resolveLifecycle(komaPkg)
+        assertTrue(komaLifecycle.isCompatible)
+        assertTrue(komaLifecycle.isActive)
+        assertFalse(komaLifecycle.isUnsupported)
+        assertEquals(ExtensionLifecycleState.ACTIVE, komaLifecycle.primaryState)
+
+        val mockHttp = OkHttpClient.Builder()
+            .addInterceptor(Interceptor { chain ->
+                val url = chain.request().url.toString()
+                val jsonBody = when {
+                    url.contains("/api/search") -> """{"data":{"items":[{"id":"m-1","meta":{"title":"Test Manga","cover":"https://mirror.example.org/c.jpg","author":"A. Author"}}]}}"""
+                    url.contains("/chapters") -> """{"chapters":[{"id":"ch-1","title":"Ch 1: Beginning","number":1.0}]}"""
+                    url.contains("/pages") -> """{"pages":[{"url":"https://mirror.example.org/p1.jpg"},{"url":"/p2.jpg"}]}"""
+                    url.contains("/api/manga/m-1") -> """{"id":"m-1","meta":{"title":"Test Manga","cover":"https://mirror.example.org/c.jpg","author":"A. Author"},"description":"Full desc","status":"ongoing"}"""
+                    else -> """{"data":{"items":[]}}"""
+                }
+                Response.Builder()
+                    .request(chain.request())
+                    .protocol(Protocol.HTTP_1_1)
+                    .code(200)
+                    .message("OK")
+                    .body(jsonBody.toResponseBody("application/json".toMediaType()))
+                    .build()
+            })
+            .build()
+
+        val adapter = ExtensionCompatibilityTranslator.translateToSourceAdapter(komaPkg, mockHttp).getOrThrow()
+        val searchRes = adapter.search("Test", 1)
+        assertEquals(1, searchRes.items.size)
+        assertEquals("Test Manga", searchRes.items.first().title)
+
+        val details = adapter.getMangaDetails("m-1")
+        assertEquals("Full desc", details.description)
+        assertEquals("A. Author", details.author)
+
+        val chapters = adapter.getChapters("m-1")
+        assertEquals(1, chapters.size)
+        assertEquals("ch-1", chapters.first().chapterKey)
+
+        val pages = adapter.getChapterPages("ch-1")
+        assertEquals(2, pages.size)
+        assertEquals("https://mirror.example.org/p1.jpg", pages[0].imageUrl)
+        assertEquals("https://mirror.example.org/p2.jpg", pages[1].imageUrl)
     }
 }

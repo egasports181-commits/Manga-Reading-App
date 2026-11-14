@@ -14,7 +14,8 @@ import java.net.URLEncoder
 
 /**
  * Sandboxed Koma Declarative JSON Source Adapter (`koma_json_v1`).
- * Parses a declarative JSON descriptor specifying REST endpoints & JSON field paths.
+ * Parses a declarative JSON descriptor specifying HTTPS REST endpoints,
+ * dot-path JSON field selectors, and optional static request headers.
  * Executes ZERO remote JavaScript and loads ZERO native/DEX code.
  */
 class DeclarativeJsonSourceAdapter(
@@ -26,7 +27,7 @@ class DeclarativeJsonSourceAdapter(
 ) : MangaSourceAdapter {
 
     override val category: String = "Koma Extension"
-    override val baseUrl: String = descriptor.optString("baseUrl", "")
+    override val baseUrl: String = descriptor.optString("baseUrl", "").trim()
     override val supportsFilters: Boolean = false
     override val supportsLogin: Boolean = false
 
@@ -41,7 +42,7 @@ class DeclarativeJsonSourceAdapter(
         }
         val start = System.currentTimeMillis()
         try {
-            val req = Request.Builder().url(baseUrl).head().build()
+            val req = applyHeaders(Request.Builder().url(baseUrl).head()).build()
             httpClient.newCall(req).execute().use { resp ->
                 val elapsed = (System.currentTimeMillis() - start).coerceAtLeast(1L)
                 SourceHealthStatus(
@@ -78,27 +79,30 @@ class DeclarativeJsonSourceAdapter(
             if (endpointTemplate.isBlank()) return@withContext SourcePagedResult(emptyList(), false)
             val url = resolveUrl(endpointTemplate.replace("{page}", page.toString()))
             val jsonText = executeGet(url)
-            val root = JSONObject(jsonText)
+            val root = parseJsonRoot(jsonText)
             val listPath = descriptor.optString("itemsPath", "items")
             val array = extractArray(root, listPath)
             val keyField = descriptor.optString("idField", "id")
             val titleField = descriptor.optString("titleField", "title")
             val coverField = descriptor.optString("coverField", "cover")
             val authorField = descriptor.optString("authorField", "author")
+            val descField = descriptor.optString("descriptionField", "description")
+            val statusField = descriptor.optString("statusField", "status")
 
             val items = buildList {
                 for (i in 0 until array.length()) {
-                    val obj = array.getJSONObject(i)
+                    val obj = array.optJSONObject(i) ?: continue
+                    val rawCover = extractString(obj, coverField)
                     add(
                         SourceMangaItem(
                             sourceId = id,
                             sourceName = name,
-                            mangaKey = obj.optString(keyField),
-                            title = obj.optString(titleField, "Untitled"),
-                            coverUrl = obj.optString(coverField),
-                            author = obj.optString(authorField),
-                            description = obj.optString("description"),
-                            status = MangaStatus.fromString(obj.optString("status")),
+                            mangaKey = extractString(obj, keyField),
+                            title = extractString(obj, titleField).ifBlank { "Untitled" },
+                            coverUrl = normalizeOptionalHttpsUrl(rawCover),
+                            author = extractString(obj, authorField),
+                            description = extractString(obj, descField),
+                            status = MangaStatus.fromString(extractString(obj, statusField)),
                             language = language
                         )
                     )
@@ -112,16 +116,18 @@ class DeclarativeJsonSourceAdapter(
         if (template.isBlank()) {
             return@withContext SourceMangaItem(id, name, mangaKey, mangaKey)
         }
-        val obj = JSONObject(executeGet(resolveUrl(template.replace("{id}", mangaKey))))
+        val root = JSONObject(executeGet(resolveUrl(template.replace("{id}", mangaKey))))
+        val detailsPath = descriptor.optString("detailsPath", "")
+        val obj = if (detailsPath.isNotBlank()) extractObject(root, detailsPath) ?: root else root
         SourceMangaItem(
             sourceId = id,
             sourceName = name,
             mangaKey = mangaKey,
-            title = obj.optString(descriptor.optString("titleField", "title"), mangaKey),
-            coverUrl = obj.optString(descriptor.optString("coverField", "cover")),
-            author = obj.optString(descriptor.optString("authorField", "author")),
-            description = obj.optString("description"),
-            status = MangaStatus.fromString(obj.optString("status")),
+            title = extractString(obj, descriptor.optString("titleField", "title")).ifBlank { mangaKey },
+            coverUrl = normalizeOptionalHttpsUrl(extractString(obj, descriptor.optString("coverField", "cover"))),
+            author = extractString(obj, descriptor.optString("authorField", "author")),
+            description = extractString(obj, descriptor.optString("descriptionField", "description")),
+            status = MangaStatus.fromString(extractString(obj, descriptor.optString("statusField", "status"))),
             language = language
         )
     }
@@ -129,16 +135,21 @@ class DeclarativeJsonSourceAdapter(
     override suspend fun getChapters(mangaKey: String): List<SourceChapter> = withContext(Dispatchers.IO) {
         val template = descriptor.optString("chaptersEndpoint", "")
         if (template.isBlank()) return@withContext emptyList()
-        val root = JSONObject(executeGet(resolveUrl(template.replace("{id}", mangaKey))))
+        val root = parseJsonRoot(executeGet(resolveUrl(template.replace("{id}", mangaKey))))
         val arr = extractArray(root, descriptor.optString("chaptersPath", "chapters"))
+        val chapterIdField = descriptor.optString("chapterIdField", "id")
+        val chapterTitleField = descriptor.optString("chapterTitleField", "title")
+        val chapterNumberField = descriptor.optString("chapterNumberField", "number")
         buildList {
             for (i in 0 until arr.length()) {
-                val obj = arr.getJSONObject(i)
+                val obj = arr.optJSONObject(i) ?: continue
+                val numVal = extractValue(obj, chapterNumberField)?.toString()?.toDoubleOrNull()
+                    ?: (i + 1).toDouble()
                 add(
                     SourceChapter(
-                        chapterKey = obj.optString("id"),
-                        name = obj.optString("title", "Chapter ${i + 1}"),
-                        chapterNumber = obj.optDouble("number", (i + 1).toDouble())
+                        chapterKey = extractString(obj, chapterIdField),
+                        name = extractString(obj, chapterTitleField).ifBlank { "Chapter ${i + 1}" },
+                        chapterNumber = numVal
                     )
                 )
             }
@@ -148,36 +159,112 @@ class DeclarativeJsonSourceAdapter(
     override suspend fun getChapterPages(chapterKey: String): List<SourcePage> = withContext(Dispatchers.IO) {
         val template = descriptor.optString("pagesEndpoint", "")
         if (template.isBlank()) return@withContext emptyList()
-        val root = JSONObject(executeGet(resolveUrl(template.replace("{chapterId}", chapterKey))))
+        val root = parseJsonRoot(executeGet(resolveUrl(template.replace("{chapterId}", chapterKey))))
         val arr = extractArray(root, descriptor.optString("pagesPath", "pages"))
+        val pageUrlField = descriptor.optString("pageUrlField", "url")
         buildList {
             for (i in 0 until arr.length()) {
-                add(SourcePage(index = i, imageUrl = arr.getString(i)))
+                val entry = arr.opt(i)
+                val rawUrl = when (entry) {
+                    is String -> entry
+                    is JSONObject -> extractString(entry, pageUrlField)
+                    else -> ""
+                }
+                if (rawUrl.isNotBlank()) {
+                    add(SourcePage(index = i, imageUrl = resolveUrl(rawUrl)))
+                }
             }
         }
     }
 
     private fun resolveUrl(path: String): String {
-        val full = if (path.startsWith("http")) path else baseUrl.trimEnd('/') + "/" + path.trimStart('/')
-        require(full.startsWith("https://")) { "Only HTTPS endpoints are permitted for Koma Declarative Extensions." }
+        val trimmed = path.trim()
+        val full = if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+            trimmed
+        } else {
+            baseUrl.trimEnd('/') + "/" + trimmed.trimStart('/')
+        }
+        require(full.startsWith("https://")) {
+            "Only HTTPS endpoints are permitted for Koma Declarative Extensions."
+        }
         return full
     }
 
+    private fun normalizeOptionalHttpsUrl(raw: String): String {
+        if (raw.isBlank()) return ""
+        return if (raw.startsWith("https://")) raw
+        else if (raw.startsWith("/")) baseUrl.trimEnd('/') + raw
+        else ""
+    }
+
+    private fun applyHeaders(builder: Request.Builder): Request.Builder {
+        val headersObj = descriptor.optJSONObject("headers")
+        if (headersObj != null) {
+            val keys = headersObj.keys()
+            while (keys.hasNext()) {
+                val key = keys.next()
+                val value = headersObj.optString(key)
+                if (key.isNotBlank() && value.isNotBlank() && !key.equals("Host", ignoreCase = true)) {
+                    builder.header(key, value)
+                }
+            }
+        }
+        return builder
+    }
+
     private fun executeGet(url: String): String {
-        val req = Request.Builder().url(url).header("Accept", "application/json").get().build()
+        val req = applyHeaders(
+            Request.Builder().url(url).header("Accept", "application/json")
+        ).get().build()
         httpClient.newCall(req).execute().use { resp ->
-            val body = resp.body?.string() ?: throw IOException("Empty response")
-            if (!resp.isSuccessful) throw IOException("HTTP ${resp.code}")
+            val body = resp.body?.string() ?: throw IOException("Empty response from $url")
+            if (!resp.isSuccessful) throw IOException("HTTP ${resp.code} from $url")
             return body
         }
     }
 
-    private fun extractArray(root: JSONObject, dotPath: String): JSONArray {
+    private fun parseJsonRoot(raw: String): Any {
+        val trimmed = raw.trim()
+        return if (trimmed.startsWith("[")) JSONArray(trimmed) else JSONObject(trimmed)
+    }
+
+    private fun extractArray(root: Any, dotPath: String): JSONArray {
+        if (root is JSONArray && (dotPath.isBlank() || dotPath == "$")) return root
+        val objRoot = root as? JSONObject ?: return JSONArray()
         val parts = dotPath.split(".").filter { it.isNotBlank() }
-        var current: Any = root
+        var current: Any = objRoot
         for (p in parts) {
             current = (current as? JSONObject)?.opt(p) ?: return JSONArray()
         }
         return current as? JSONArray ?: JSONArray()
+    }
+
+    private fun extractObject(root: JSONObject, dotPath: String): JSONObject? {
+        val parts = dotPath.split(".").filter { it.isNotBlank() }
+        var current: Any = root
+        for (p in parts) {
+            current = (current as? JSONObject)?.opt(p) ?: return null
+        }
+        return current as? JSONObject
+    }
+
+    private fun extractValue(root: JSONObject, dotPath: String): Any? {
+        if (dotPath.isBlank()) return null
+        if (!dotPath.contains(".")) return root.opt(dotPath)
+        val parts = dotPath.split(".").filter { it.isNotBlank() }
+        var current: Any = root
+        for (i in parts.indices) {
+            val obj = current as? JSONObject ?: return null
+            val next = obj.opt(parts[i]) ?: return null
+            if (i == parts.lastIndex) return next
+            current = next
+        }
+        return null
+    }
+
+    private fun extractString(root: JSONObject, dotPath: String): String {
+        val value = extractValue(root, dotPath) ?: return ""
+        val str = value.toString().trim()
+        return if (str == "null") "" else str
     }
 }

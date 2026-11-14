@@ -113,13 +113,21 @@ enum class ExtensionFormat(val id: String, val label: String, val executable: Bo
 }
 
 enum class ExtensionCompatibilityStatus(val label: String) {
-    EXECUTABLE_KOMA_JSON("Executable (Koma Sandboxed)"),
-    VERIFIED_MIHON_RUNTIME_RESTRICTED("Verified APK • Runtime Restricted"),
-    COMPATIBLE_MIHON_METADATA("Compatible Metadata (v1.2–v1.5)"),
-    LIB_VERSION_INCOMPATIBLE("Incompatible Extension Lib Version"),
+    EXECUTABLE_KOMA_JSON("Compatible (koma_json_v1)"),
+    VERIFIED_MIHON_RUNTIME_RESTRICTED("Unsupported Runtime (Native APK/DEX)"),
+    COMPATIBLE_MIHON_METADATA("Compatible Metadata (v1.2–v1.6)"),
+    LIB_VERSION_INCOMPATIBLE("Unsupported Extension Lib Version"),
     SIGNATURE_MISMATCH("Signing Key Fingerprint Mismatch"),
     UNTRUSTED_REPO("Repository Untrusted"),
     UNKNOWN("Pending Inspection")
+}
+
+enum class ExtensionLifecycleState(val label: String) {
+    ACTIVE("Active"),
+    COMPATIBLE("Compatible"),
+    VERIFIED("Verified"),
+    DOWNLOADED("Downloaded"),
+    UNSUPPORTED("Unsupported")
 }
 
 enum class DownloadStatus(val label: String) {

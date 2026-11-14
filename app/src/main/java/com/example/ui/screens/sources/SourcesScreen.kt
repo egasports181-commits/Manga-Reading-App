@@ -38,6 +38,7 @@ import coil.compose.AsyncImage
 import com.example.data.local.entity.ExtensionPackageEntity
 import com.example.data.local.entity.ExtensionRepoEntity
 import com.example.domain.model.*
+import com.example.extension.ExtensionCompatibilityResolver
 import com.example.ui.components.KomaEmptyState
 import com.example.ui.components.LiquidGlassSurface
 import com.example.ui.components.LiquidGlassTopBar
@@ -908,7 +909,11 @@ private fun ExtensionsManagerTab(
                                 Text(
                                     entry.status,
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = if (entry.status == "SUCCESS" || entry.status == "VERIFIED") StatusOngoing else StatusHiatus
+                                    color = when (entry.status) {
+                                        "SUCCESS", "ACTIVE" -> StatusOngoing
+                                        "VERIFIED", "VERIFIED_UNSUPPORTED_RUNTIME" -> StatusCompleted
+                                        else -> StatusHiatus
+                                    }
                                 )
                             }
                             Text(
@@ -1039,9 +1044,7 @@ private fun ExtensionsManagerTab(
                     val isKoma = pkg.format == ExtensionFormat.KOMA_JSON_ADAPTER.id
                     val isApkVerified = pkg.localApkPath.isNotBlank()
                     val downloadFraction = state.extDownloadProgress[pkg.pkgId]
-                    val compatStatus = runCatching {
-                        ExtensionCompatibilityStatus.valueOf(pkg.compatibilityStatus)
-                    }.getOrDefault(ExtensionCompatibilityStatus.UNKNOWN)
+                    val lifecycle = ExtensionCompatibilityResolver.resolveLifecycle(pkg)
 
                     Surface(
                         color = MaterialTheme.colorScheme.surfaceContainer,
@@ -1093,24 +1096,24 @@ private fun ExtensionsManagerTab(
                                     )
                                 }
 
-                                val badgeColor = when (compatStatus) {
-                                    ExtensionCompatibilityStatus.EXECUTABLE_KOMA_JSON -> StatusOngoing
-                                    ExtensionCompatibilityStatus.VERIFIED_MIHON_RUNTIME_RESTRICTED,
-                                    ExtensionCompatibilityStatus.COMPATIBLE_MIHON_METADATA -> StatusCompleted
-                                    ExtensionCompatibilityStatus.SIGNATURE_MISMATCH,
-                                    ExtensionCompatibilityStatus.LIB_VERSION_INCOMPATIBLE,
-                                    ExtensionCompatibilityStatus.UNTRUSTED_REPO -> StatusError
-                                    ExtensionCompatibilityStatus.UNKNOWN -> StatusHiatus
+                                val badgeColor = when (lifecycle.primaryState) {
+                                    ExtensionLifecycleState.ACTIVE -> StatusOngoing
+                                    ExtensionLifecycleState.COMPATIBLE -> StatusCompleted
+                                    ExtensionLifecycleState.VERIFIED,
+                                    ExtensionLifecycleState.DOWNLOADED -> StatusHiatus
+                                    ExtensionLifecycleState.UNSUPPORTED -> StatusError
                                 }
                                 Surface(
                                     color = badgeColor.copy(alpha = 0.14f),
                                     shape = RoundedCornerShape(6.dp)
                                 ) {
                                     Text(
-                                        text = when {
-                                            isKoma -> "Koma Sandbox"
-                                            isApkVerified -> "APK Verified"
-                                            else -> "Mihon APK"
+                                        text = when (lifecycle.primaryState) {
+                                            ExtensionLifecycleState.ACTIVE -> "Active"
+                                            ExtensionLifecycleState.COMPATIBLE -> "Compatible"
+                                            ExtensionLifecycleState.VERIFIED -> "Verified • Unsupported"
+                                            ExtensionLifecycleState.DOWNLOADED -> "Downloaded"
+                                            ExtensionLifecycleState.UNSUPPORTED -> "Unsupported APK"
                                         },
                                         style = MaterialTheme.typography.labelSmall,
                                         color = badgeColor,
@@ -1143,13 +1146,13 @@ private fun ExtensionsManagerTab(
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                if (pkg.isInstalled) {
+                                if (pkg.isInstalled && lifecycle.isCompatible) {
                                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                         Switch(
                                             checked = pkg.isEnabled,
                                             onCheckedChange = { onToggleEnabled(pkg.pkgId, it) }
                                         )
-                                        Text(if (pkg.isEnabled) "Active" else "Disabled", style = MaterialTheme.typography.labelMedium)
+                                        Text(if (pkg.isEnabled) "Active" else "Installed (Paused)", style = MaterialTheme.typography.labelMedium)
                                     }
                                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                         if (pkg.hasUpdate) {
@@ -1159,11 +1162,7 @@ private fun ExtensionsManagerTab(
                                     }
                                 } else {
                                     Text(
-                                        text = if (isApkVerified) {
-                                            "Verified ${pkg.libVersion} • Runtime Restricted"
-                                        } else {
-                                            pkg.permissionsSummary
-                                        },
+                                        text = lifecycle.summaryText,
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         maxLines = 1,
@@ -1174,13 +1173,13 @@ private fun ExtensionsManagerTab(
                                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                         if (isApkVerified) {
                                             OutlinedButton(onClick = { onUninstall(pkg.pkgId) }) {
-                                                Text("Remove")
+                                                Text("Remove APK")
                                             }
-                                        } else if (isKoma) {
+                                        } else if (isKoma && lifecycle.isCompatible) {
                                             Button(onClick = { onInstallOrUpdate(pkg) }) {
                                                 Text("Install")
                                             }
-                                        } else {
+                                        } else if (!isKoma) {
                                             FilledTonalButton(
                                                 onClick = { onInstallOrUpdate(pkg) },
                                                 enabled = pkg.apkUrl.startsWith("https://") && downloadFraction == null
@@ -1321,6 +1320,7 @@ private fun ExtensionInspectDialog(
     onOpenApkInBrowser: (String) -> Unit
 ) {
     val isKoma = pkg.format == ExtensionFormat.KOMA_JSON_ADAPTER.id
+    val lifecycle = ExtensionCompatibilityResolver.resolveLifecycle(pkg)
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(pkg.name) },
@@ -1332,7 +1332,16 @@ private fun ExtensionInspectDialog(
                 if (pkg.libVersion.isNotBlank()) {
                     Text("Target Lib Version: ${pkg.libVersion}", style = MaterialTheme.typography.bodySmall)
                 }
-                Text("Status: ${pkg.compatibilityStatus}", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                Text(
+                    "Lifecycle: ${lifecycle.badges.joinToString(" • ")}",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (lifecycle.isCompatible) StatusOngoing else StatusHiatus
+                )
+                Text(
+                    "States — Downloaded: ${lifecycle.isDownloaded} • Verified: ${lifecycle.isVerified} • Compatible: ${lifecycle.isCompatible} • Active: ${lifecycle.isActive}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
                 if (pkg.compatibilityReason.isNotBlank()) {
                     Text(pkg.compatibilityReason, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
@@ -1352,7 +1361,7 @@ private fun ExtensionInspectDialog(
             }
         },
         confirmButton = {
-            if (isKoma && !pkg.isInstalled) {
+            if (isKoma && lifecycle.isCompatible && !pkg.isInstalled) {
                 Button(onClick = onInstallOrVerify) { Text("Install") }
             } else if (!isKoma && pkg.apkUrl.startsWith("https://")) {
                 FilledTonalButton(onClick = onInstallOrVerify) { Text("Download & Verify SHA-256") }

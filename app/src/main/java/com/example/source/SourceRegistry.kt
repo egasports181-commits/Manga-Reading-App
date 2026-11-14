@@ -4,11 +4,11 @@ import android.content.Context
 import com.example.data.local.dao.ExtensionDao
 import com.example.data.local.dao.SourcePreferenceDao
 import com.example.data.preferences.AppPreferencesRepository
+import com.example.extension.ExtensionCompatibilityTranslator
 import com.example.extension.ExtensionSourceRegistry
 import com.example.extension.LoadedExtensionDescriptor
 import kotlinx.coroutines.flow.*
 import okhttp3.OkHttpClient
-import org.json.JSONObject
 
 data class ConfiguredSourceEntry(
     val adapter: MangaSourceAdapter,
@@ -38,18 +38,11 @@ class SourceRegistry(
             add(ConfiguredSourceEntry(mangaDex, mangaDex.id !in prefs.disabledSourceIds))
             add(ConfiguredSourceEntry(localSaf, localSaf.id !in prefs.disabledSourceIds))
             installedPkgs.forEach { pkg ->
-                runCatching {
-                    val json = JSONObject(pkg.adapterJson)
-                    DeclarativeJsonSourceAdapter(
-                        id = pkg.pkgId,
-                        name = pkg.name,
-                        language = pkg.language,
-                        descriptor = json,
-                        httpClient = httpClient
-                    )
-                }.getOrNull()?.let { adapter ->
-                    add(ConfiguredSourceEntry(adapter, adapter.id !in prefs.disabledSourceIds))
-                }
+                ExtensionCompatibilityTranslator.translateToSourceAdapter(pkg, httpClient)
+                    .getOrNull()
+                    ?.let { adapter ->
+                        add(ConfiguredSourceEntry(adapter, adapter.id !in prefs.disabledSourceIds))
+                    }
             }
             if (prefs.demoModeEnabled) {
                 add(ConfiguredSourceEntry(demoSample, demoSample.id !in prefs.disabledSourceIds))
