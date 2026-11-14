@@ -8,6 +8,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -22,6 +23,7 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.VerticalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -32,6 +34,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
@@ -42,6 +45,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -53,6 +57,8 @@ import coil.compose.SubcomposeAsyncImage
 import com.example.domain.model.*
 import com.example.network.NetworkErrorFormatter
 import com.example.ui.components.ErrorRetryBanner
+import com.example.ui.components.KomaCircularGlassButton
+import com.example.ui.components.KomaElevatedCard
 import com.example.ui.components.LiquidGlassFloatingPill
 import com.example.ui.components.LiquidGlassSurface
 import kotlinx.coroutines.delay
@@ -210,11 +216,28 @@ fun ReaderScreen(
     ) {
         when {
             state.isLoading -> {
-                CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
+                Column(
+                    modifier = Modifier.align(Alignment.Center),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    CircularProgressIndicator(
+                        color = MaterialTheme.colorScheme.primary,
+                        strokeWidth = 3.dp
+                    )
+                    LiquidGlassFloatingPill {
+                        Text(
+                            text = "Loading chapter…",
+                            style = MaterialTheme.typography.labelMedium
+                        )
+                    }
+                }
             }
             state.error != null -> {
                 Column(
-                    modifier = Modifier.align(Alignment.Center).padding(24.dp),
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .padding(24.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
@@ -222,7 +245,9 @@ fun ReaderScreen(
                         message = state.error!!,
                         onRetry = { state.chapter?.let { viewModel.loadChapter(it.id) } }
                     )
-                    OutlinedButton(onClick = onBack) { Text("Back to Manga") }
+                    OutlinedButton(onClick = onBack, shape = CircleShape) {
+                        Text("Back to Manga")
+                    }
                 }
             }
             state.pages.isNotEmpty() -> {
@@ -296,7 +321,9 @@ fun ReaderScreen(
                         }
                         VerticalPager(
                             state = pagerState,
-                            modifier = Modifier.fillMaxSize().padding(horizontal = marginDp)
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(horizontal = marginDp)
                         ) { idx ->
                             val scrollAction: (Int) -> Unit = { target ->
                                 scope.launch {
@@ -337,7 +364,9 @@ fun ReaderScreen(
                         HorizontalPager(
                             state = pagerState,
                             reverseLayout = true,
-                            modifier = Modifier.fillMaxSize().padding(horizontal = marginDp)
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(horizontal = marginDp)
                         ) { spreadIdx ->
                             val pair = spreads[spreadIdx]
                             Row(
@@ -352,7 +381,9 @@ fun ReaderScreen(
                                         imageUrl = p.imageUrl,
                                         contentDescription = "Page ${p.index + 1}",
                                         contentScale = ContentScale.Fit,
-                                        modifier = Modifier.weight(1f).fillMaxHeight()
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .fillMaxHeight()
                                     )
                                 }
                             }
@@ -374,7 +405,9 @@ fun ReaderScreen(
                         HorizontalPager(
                             state = pagerState,
                             reverseLayout = isRtl,
-                            modifier = Modifier.fillMaxSize().padding(horizontal = marginDp)
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(horizontal = marginDp)
                         ) { idx ->
                             val scrollAction: (Int) -> Unit = { target ->
                                 scope.launch {
@@ -406,7 +439,7 @@ fun ReaderScreen(
             }
         }
 
-        // Discreet floating liquid glass page pill when HUD is hidden
+        // Ultra-minimal frosted page indicator pill when HUD is hidden
         if (!showOverlay && state.pages.isNotEmpty()) {
             LiquidGlassFloatingPill(
                 modifier = Modifier
@@ -425,94 +458,124 @@ fun ReaderScreen(
                 }
                 Text(
                     text = "${state.currentPage + 1} / ${state.pages.size}",
-                    style = MaterialTheme.typography.labelSmall
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.SemiBold
                 )
             }
         }
 
-        // Top Liquid Glass HUD Overlay
+        // Top Frosted Glass HUD Overlay
         AnimatedVisibility(
             visible = showOverlay,
-            enter = fadeIn(),
-            exit = fadeOut(),
+            enter = fadeIn(tween(180)),
+            exit = fadeOut(tween(180)),
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .statusBarsPadding()
-                .padding(horizontal = 12.dp, vertical = 8.dp)
-        ) {
-            LiquidGlassSurface(
-                shape = RoundedCornerShape(22.dp),
-                shadowElevation = 12.dp
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 6.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Exit reader")
-                    }
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = state.manga?.title ?: "",
-                            style = MaterialTheme.typography.titleSmall,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Text(
-                            text = buildString {
-                                append(state.chapter?.name ?: "")
-                                if (state.isOfflineChapter) append(" • Offline")
-                            },
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                    IconButton(
-                        onClick = viewModel::toggleCurrentPageBookmark,
-                        modifier = Modifier.testTag("reader_bookmark_page_button")
-                    ) {
-                        Icon(
-                            if (isCurrentBookmarked) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
-                            contentDescription = "Bookmark page",
-                            tint = if (isCurrentBookmarked) MaterialTheme.colorScheme.primary else LocalContentColor.current
-                        )
-                    }
-                    IconButton(onClick = { showChaptersSheet = true }) {
-                        Icon(Icons.Default.List, contentDescription = "Chapters & Bookmarks")
-                    }
-                    IconButton(
-                        onClick = { showSettingsSheet = true },
-                        modifier = Modifier.testTag("reader_settings_button")
-                    ) {
-                        Icon(Icons.Default.Tune, contentDescription = "Reader settings")
-                    }
-                }
-            }
-        }
-
-        // Bottom Liquid Glass HUD Overlay
-        AnimatedVisibility(
-            visible = showOverlay && state.pages.isNotEmpty(),
-            enter = fadeIn(),
-            exit = fadeOut(),
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .navigationBarsPadding()
                 .padding(horizontal = 12.dp, vertical = 10.dp)
         ) {
             LiquidGlassSurface(
                 shape = RoundedCornerShape(24.dp),
-                shadowElevation = 12.dp
+                shadowElevation = 14.dp
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 8.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    KomaCircularGlassButton(
+                        icon = Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = "Exit reader",
+                        onClick = onBack,
+                        containerSize = 40.dp
+                    )
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(horizontal = 4.dp)
+                    ) {
+                        Text(
+                            text = state.manga?.title ?: "",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(
+                                text = state.chapter?.name ?: "",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, fill = false)
+                            )
+                            if (state.isOfflineChapter) {
+                                Surface(
+                                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.16f),
+                                    shape = CircleShape
+                                ) {
+                                    Text(
+                                        text = "OFFLINE",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    KomaCircularGlassButton(
+                        icon = if (isCurrentBookmarked) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
+                        contentDescription = "Bookmark page",
+                        onClick = viewModel::toggleCurrentPageBookmark,
+                        tint = if (isCurrentBookmarked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                        containerSize = 40.dp,
+                        modifier = Modifier.testTag("reader_bookmark_page_button")
+                    )
+                    KomaCircularGlassButton(
+                        icon = Icons.Default.List,
+                        contentDescription = "Chapters & Bookmarks",
+                        onClick = { showChaptersSheet = true },
+                        containerSize = 40.dp
+                    )
+                    KomaCircularGlassButton(
+                        icon = Icons.Default.Tune,
+                        contentDescription = "Reader settings",
+                        onClick = { showSettingsSheet = true },
+                        tint = MaterialTheme.colorScheme.primary,
+                        containerSize = 40.dp,
+                        modifier = Modifier.testTag("reader_settings_button")
+                    )
+                }
+            }
+        }
+
+        // Bottom Frosted Glass HUD Overlay
+        AnimatedVisibility(
+            visible = showOverlay && state.pages.isNotEmpty(),
+            enter = fadeIn(tween(180)),
+            exit = fadeOut(tween(180)),
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .navigationBarsPadding()
+                .padding(horizontal = 12.dp, vertical = 12.dp)
+        ) {
+            LiquidGlassSurface(
+                shape = RoundedCornerShape(26.dp),
+                shadowElevation = 14.dp
             ) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     if (state.bookmarkedPages.isNotEmpty()) {
                         Row(
@@ -529,7 +592,8 @@ fun ReaderScreen(
                             state.bookmarkedPages.sorted().forEach { bm ->
                                 AssistChip(
                                     onClick = { viewModel.onPageChanged(bm) },
-                                    label = { Text("p.${bm + 1}") }
+                                    label = { Text("p.${bm + 1}") },
+                                    shape = CircleShape
                                 )
                             }
                         }
@@ -543,27 +607,41 @@ fun ReaderScreen(
                             onClick = viewModel::goToPreviousChapter,
                             enabled = state.hasPrevChapter
                         ) {
-                            Icon(Icons.AutoMirrored.Filled.NavigateBefore, contentDescription = "Previous chapter")
+                            Icon(
+                                Icons.AutoMirrored.Filled.NavigateBefore,
+                                contentDescription = "Previous chapter"
+                            )
                         }
                         Text(
                             text = "${state.currentPage + 1}",
-                            style = MaterialTheme.typography.labelLarge
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
                         )
                         Slider(
                             value = state.currentPage.toFloat(),
                             onValueChange = { viewModel.onPageChanged(it.toInt()) },
                             valueRange = 0f..(state.pages.lastIndex.coerceAtLeast(1)).toFloat(),
+                            colors = SliderDefaults.colors(
+                                thumbColor = MaterialTheme.colorScheme.primary,
+                                activeTrackColor = MaterialTheme.colorScheme.primary,
+                                inactiveTrackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.16f)
+                            ),
                             modifier = Modifier.weight(1f)
                         )
                         Text(
                             text = "${state.pages.size}",
-                            style = MaterialTheme.typography.labelLarge
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         IconButton(
                             onClick = viewModel::goToNextChapter,
                             enabled = state.hasNextChapter
                         ) {
-                            Icon(Icons.AutoMirrored.Filled.NavigateNext, contentDescription = "Next chapter")
+                            Icon(
+                                Icons.AutoMirrored.Filled.NavigateNext,
+                                contentDescription = "Next chapter"
+                            )
                         }
                     }
                 }
@@ -594,31 +672,70 @@ fun ReaderScreen(
 
     if (showChaptersSheet) {
         ModalBottomSheet(onDismissRequest = { showChaptersSheet = false }) {
-            Column(modifier = Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 24.dp)
+            ) {
                 Text(
                     "Chapters",
                     style = MaterialTheme.typography.headlineSmall,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
                 )
-                LazyColumn(modifier = Modifier.heightIn(max = 360.dp)) {
+                LazyColumn(
+                    modifier = Modifier.heightIn(max = 380.dp),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
                     itemsIndexed(state.allChapters, key = { _, c -> c.id }) { _, ch ->
                         val active = ch.id == state.chapter?.id
-                        ListItem(
-                            headlineContent = {
-                                Text(
-                                    ch.name,
-                                    color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
-                                )
+                        KomaElevatedCard(
+                            shape = RoundedCornerShape(16.dp),
+                            containerColor = if (active) {
+                                MaterialTheme.colorScheme.primaryContainer
+                            } else {
+                                MaterialTheme.colorScheme.surfaceContainer
                             },
-                            trailingContent = {
-                                if (active) Icon(Icons.Default.PlayArrow, contentDescription = "Current")
+                            borderColor = if (active) {
+                                MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
+                            } else {
+                                MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)
                             },
-                            modifier = Modifier.clickable {
+                            onClick = {
                                 viewModel.persistCurrentSession()
                                 viewModel.loadChapter(ch.id)
                                 showChaptersSheet = false
                             }
-                        )
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = ch.name,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
+                                    color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                if (active) {
+                                    Surface(color = MaterialTheme.colorScheme.primary, shape = CircleShape) {
+                                        Icon(
+                                            Icons.Default.PlayArrow,
+                                            contentDescription = "Current",
+                                            tint = MaterialTheme.colorScheme.onPrimary,
+                                            modifier = Modifier.padding(4.dp).size(16.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -644,10 +761,16 @@ private fun RetryablePageImage(
         modifier = modifier,
         loading = {
             Box(
-                modifier = Modifier.fillMaxSize().heightIn(min = 240.dp),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .heightIn(min = 240.dp),
                 contentAlignment = Alignment.Center
             ) {
-                CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(28.dp))
+                CircularProgressIndicator(
+                    strokeWidth = 2.5.dp,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(30.dp)
+                )
             }
         },
         error = { errorState ->
@@ -657,28 +780,48 @@ private fun RetryablePageImage(
             val reason = remember(errorState.result.throwable, hostHint) {
                 NetworkErrorFormatter.describe(errorState.result.throwable, hostHint)
             }
-            Column(
-                modifier = Modifier.fillMaxSize().heightIn(min = 240.dp).padding(24.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .heightIn(min = 240.dp)
+                    .padding(24.dp),
+                contentAlignment = Alignment.Center
             ) {
-                Icon(Icons.Default.BrokenImage, contentDescription = null, tint = Color.White.copy(alpha = 0.7f))
-                Spacer(Modifier.height(8.dp))
-                Text("Page failed to load", style = MaterialTheme.typography.bodySmall, color = Color.White)
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    text = reason,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Color.White.copy(alpha = 0.75f),
-                    textAlign = TextAlign.Center,
-                    maxLines = 4,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Spacer(Modifier.height(8.dp))
-                FilledTonalButton(onClick = { retryNonce++ }) {
-                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.width(4.dp))
-                    Text("Retry Page")
+                Surface(
+                    color = Color(0xFF171922).copy(alpha = 0.88f),
+                    shape = RoundedCornerShape(22.dp),
+                    border = BorderStroke(0.75.dp, Color.White.copy(alpha = 0.14f))
+                ) {
+                    Column(
+                        modifier = Modifier.padding(20.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.BrokenImage,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(28.dp)
+                        )
+                        Text(
+                            "Page failed to load",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = Color.White
+                        )
+                        Text(
+                            text = reason,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color.White.copy(alpha = 0.72f),
+                            textAlign = TextAlign.Center,
+                            maxLines = 4,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Button(onClick = { retryNonce++ }, shape = CircleShape) {
+                            Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Retry Page")
+                        }
+                    }
                 }
             }
         }
@@ -786,161 +929,172 @@ private fun ReaderSettingsBottomSheet(
             contentPadding = PaddingValues(bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            item { Text("Reader Controls", style = MaterialTheme.typography.headlineSmall) }
-
             item {
-                Text("Reading Mode", style = MaterialTheme.typography.labelLarge)
-                Row(
-                    modifier = Modifier.horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    ReadingMode.entries.forEach { mode ->
-                        FilterChip(
-                            selected = state.readingMode == mode,
-                            onClick = { onReadingMode(mode) },
-                            label = { Text(mode.label) }
-                        )
-                    }
-                }
-            }
-
-            item {
-                Text("Tap Zone Layout", style = MaterialTheme.typography.labelLarge)
-                Row(
-                    modifier = Modifier.horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    TapZoneLayout.entries.forEach { layout ->
-                        FilterChip(
-                            selected = state.tapZoneLayout == layout,
-                            onClick = { onTapZoneLayout(layout) },
-                            label = { Text(layout.label) }
-                        )
-                    }
-                }
                 Text(
-                    state.tapZoneLayout.description,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    "Reader Controls",
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold
                 )
             }
 
             item {
-                Text("Image Scaling", style = MaterialTheme.typography.labelLarge)
-                Row(
-                    modifier = Modifier.horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    ImageScaleMode.entries.forEach { sc ->
-                        FilterChip(
-                            selected = state.scaleMode == sc,
-                            onClick = { onScaleMode(sc) },
-                            label = { Text(sc.label) }
-                        )
-                    }
-                }
-                if (state.scaleMode == ImageScaleMode.CUSTOM) {
-                    Text("Custom Scale: ${"%.1f".format(state.customZoom)}x", style = MaterialTheme.typography.bodySmall)
-                    Slider(
-                        value = state.customZoom,
-                        onValueChange = onCustomZoom,
-                        valueRange = 0.7f..2.5f
-                    )
-                }
-            }
+                KomaElevatedCard(shape = RoundedCornerShape(18.dp)) {
+                    Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text("Reading Mode", style = MaterialTheme.typography.labelLarge)
+                        Row(
+                            modifier = Modifier.horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            ReadingMode.entries.forEach { mode ->
+                                FilterChip(
+                                    selected = state.readingMode == mode,
+                                    onClick = { onReadingMode(mode) },
+                                    label = { Text(mode.label) },
+                                    shape = CircleShape
+                                )
+                            }
+                        }
 
-            item {
-                Text("Side Margins: ${state.pageMarginsDp} dp", style = MaterialTheme.typography.labelLarge)
-                Slider(
-                    value = state.pageMarginsDp.toFloat(),
-                    onValueChange = { onPageMargins(it.toInt()) },
-                    valueRange = 0f..32f,
-                    steps = 7
-                )
-            }
+                        Text("Image Scaling", style = MaterialTheme.typography.labelLarge)
+                        Row(
+                            modifier = Modifier.horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            ImageScaleMode.entries.forEach { sc ->
+                                FilterChip(
+                                    selected = state.scaleMode == sc,
+                                    onClick = { onScaleMode(sc) },
+                                    label = { Text(sc.label) },
+                                    shape = CircleShape
+                                )
+                            }
+                        }
+                        if (state.scaleMode == ImageScaleMode.CUSTOM) {
+                            Text("Custom Scale: ${"%.1f".format(state.customZoom)}x", style = MaterialTheme.typography.bodySmall)
+                            Slider(
+                                value = state.customZoom,
+                                onValueChange = onCustomZoom,
+                                valueRange = 0.7f..2.5f
+                            )
+                        }
 
-            item {
-                Text("Page Transition", style = MaterialTheme.typography.labelLarge)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    ReaderTransitionMode.entries.forEach { tm ->
-                        FilterChip(
-                            selected = state.transitionMode == tm,
-                            onClick = { onTransitionMode(tm) },
-                            label = { Text(tm.label) }
-                        )
-                    }
-                }
-            }
-
-            item {
-                Text("Background Color", style = MaterialTheme.typography.labelLarge)
-                Row(
-                    modifier = Modifier.horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    ReaderBackground.entries.forEach { bg ->
-                        FilterChip(
-                            selected = state.background == bg,
-                            onClick = { onBackground(bg) },
-                            label = { Text(bg.label) }
+                        Text("Side Margins: ${state.pageMarginsDp} dp", style = MaterialTheme.typography.labelLarge)
+                        Slider(
+                            value = state.pageMarginsDp.toFloat(),
+                            onValueChange = { onPageMargins(it.toInt()) },
+                            valueRange = 0f..32f,
+                            steps = 7
                         )
                     }
                 }
             }
 
             item {
-                Text("Auto-Hide Controls Timer", style = MaterialTheme.typography.labelLarge)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf(0 to "Manual", 3000 to "3s", 5000 to "5s").forEach { (ms, lbl) ->
-                        FilterChip(
-                            selected = state.autoHideMs == ms,
-                            onClick = { onAutoHideMs(ms) },
-                            label = { Text(lbl) }
+                KomaElevatedCard(shape = RoundedCornerShape(18.dp)) {
+                    Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text("Tap Zone Layout", style = MaterialTheme.typography.labelLarge)
+                        Row(
+                            modifier = Modifier.horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            TapZoneLayout.entries.forEach { layout ->
+                                FilterChip(
+                                    selected = state.tapZoneLayout == layout,
+                                    onClick = { onTapZoneLayout(layout) },
+                                    label = { Text(layout.label) },
+                                    shape = CircleShape
+                                )
+                            }
+                        }
+                        Text(
+                            state.tapZoneLayout.description,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
+
+                        Text("Page Transition", style = MaterialTheme.typography.labelLarge)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            ReaderTransitionMode.entries.forEach { tm ->
+                                FilterChip(
+                                    selected = state.transitionMode == tm,
+                                    onClick = { onTransitionMode(tm) },
+                                    label = { Text(tm.label) },
+                                    shape = CircleShape
+                                )
+                            }
+                        }
+
+                        Text("Background Color", style = MaterialTheme.typography.labelLarge)
+                        Row(
+                            modifier = Modifier.horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            ReaderBackground.entries.forEach { bg ->
+                                FilterChip(
+                                    selected = state.background == bg,
+                                    onClick = { onBackground(bg) },
+                                    label = { Text(bg.label) },
+                                    shape = CircleShape
+                                )
+                            }
+                        }
                     }
                 }
             }
 
             item {
-                Text("Screen Orientation", style = MaterialTheme.typography.labelLarge)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OrientationLock.entries.forEach { lock ->
-                        FilterChip(
-                            selected = state.orientationLock == lock,
-                            onClick = { onOrientationLock(lock) },
-                            label = { Text(lock.label) }
-                        )
+                KomaElevatedCard(shape = RoundedCornerShape(18.dp)) {
+                    Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text("Auto-Hide Controls Timer", style = MaterialTheme.typography.labelLarge)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            listOf(0 to "Manual", 3000 to "3s", 5000 to "5s").forEach { (ms, lbl) ->
+                                FilterChip(
+                                    selected = state.autoHideMs == ms,
+                                    onClick = { onAutoHideMs(ms) },
+                                    label = { Text(lbl) },
+                                    shape = CircleShape
+                                )
+                            }
+                        }
+
+                        Text("Screen Orientation", style = MaterialTheme.typography.labelLarge)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OrientationLock.entries.forEach { lock ->
+                                FilterChip(
+                                    selected = state.orientationLock == lock,
+                                    onClick = { onOrientationLock(lock) },
+                                    label = { Text(lock.label) },
+                                    shape = CircleShape
+                                )
+                            }
+                        }
+
+                        val isAutoBrightness = state.brightness < 0f
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("Custom Brightness", style = MaterialTheme.typography.bodyMedium)
+                            Switch(
+                                checked = !isAutoBrightness,
+                                onCheckedChange = { custom -> onBrightness(if (custom) 0.5f else -1f) }
+                            )
+                        }
+                        if (!isAutoBrightness) {
+                            Slider(
+                                value = state.brightness.coerceIn(0.05f, 1f),
+                                onValueChange = onBrightness,
+                                valueRange = 0.05f..1f
+                            )
+                        }
+
+                        SettingToggleRow("Tap Zones Navigation", state.tapZonesEnabled, onTapZones)
+                        SettingToggleRow("Volume Button Navigation", state.volumeNavEnabled, onVolumeNav)
+                        SettingToggleRow("Keep Screen Awake", state.keepScreenAwake, onKeepAwake)
+                        SettingToggleRow("Hide System Bars (Immersive)", state.hideSystemBars, onHideBars)
                     }
                 }
-            }
-
-            item {
-                val isAutoBrightness = state.brightness < 0f
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text("Custom Brightness", style = MaterialTheme.typography.bodyMedium)
-                    Switch(
-                        checked = !isAutoBrightness,
-                        onCheckedChange = { custom -> onBrightness(if (custom) 0.5f else -1f) }
-                    )
-                }
-                if (!isAutoBrightness) {
-                    Slider(
-                        value = state.brightness.coerceIn(0.05f, 1f),
-                        onValueChange = onBrightness,
-                        valueRange = 0.05f..1f
-                    )
-                }
-            }
-
-            item {
-                SettingToggleRow("Tap Zones Navigation", state.tapZonesEnabled, onTapZones)
-                SettingToggleRow("Volume Button Navigation", state.volumeNavEnabled, onVolumeNav)
-                SettingToggleRow("Keep Screen Awake", state.keepScreenAwake, onKeepAwake)
-                SettingToggleRow("Hide System Bars (Immersive)", state.hideSystemBars, onHideBars)
             }
         }
     }
@@ -949,11 +1103,13 @@ private fun ReaderSettingsBottomSheet(
 @Composable
 private fun SettingToggleRow(label: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
     Row(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        Text(label, style = MaterialTheme.typography.bodyMedium)
+        Text(label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
         Switch(checked = checked, onCheckedChange = onCheckedChange)
     }
 }

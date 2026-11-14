@@ -139,7 +139,10 @@ fun KomaAppNavigation(container: AppContainer) {
         Box(modifier = Modifier.fillMaxSize()) {
             Row(modifier = Modifier.fillMaxSize()) {
                 if (showChrome && useRail) {
-                    NavigationRail {
+                    NavigationRail(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                        contentColor = MaterialTheme.colorScheme.onSurface
+                    ) {
                         topTabs.forEach { tab ->
                             val selected = (selectedTabId ?: "home") == tab.id
                             NavigationRailItem(
@@ -152,6 +155,13 @@ fun KomaAppNavigation(container: AppContainer) {
                                     )
                                 },
                                 label = { Text(tab.label, maxLines = 1) },
+                                colors = NavigationRailItemDefaults.colors(
+                                    selectedIconColor = MaterialTheme.colorScheme.primary,
+                                    selectedTextColor = MaterialTheme.colorScheme.primary,
+                                    indicatorColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.16f),
+                                    unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
+                                ),
                                 modifier = Modifier.testTag(tab.tag)
                             )
                         }

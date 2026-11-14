@@ -1,9 +1,11 @@
 package com.example.ui.screens.more
 
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
@@ -12,8 +14,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.ui.components.KomaCircularGlassButton
+import com.example.ui.components.KomaElevatedCard
 import com.example.ui.components.KomaEmptyState
 import com.example.ui.components.LiquidGlassTopBar
 
@@ -30,35 +37,54 @@ fun DownloadsScreen(
         topBar = {
             LiquidGlassTopBar(
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
+                    KomaCircularGlassButton(
+                        icon = Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = "Back",
+                        onClick = onBack,
+                        modifier = Modifier.padding(start = 8.dp)
+                    )
                 },
                 title = "Download Manager",
                 subtitle = "${state.downloadQueue.size} queued • ${state.downloadedChapters.size} offline",
                 actions = {
-                    IconButton(onClick = viewModel::cleanupReadDownloads) {
-                        Icon(Icons.Default.CleaningServices, contentDescription = "Clean up read downloads")
-                    }
-                    IconButton(onClick = viewModel::clearCompletedDownloads) {
-                        Icon(Icons.Default.ClearAll, contentDescription = "Clear completed queue")
-                    }
+                    KomaCircularGlassButton(
+                        icon = Icons.Default.CleaningServices,
+                        contentDescription = "Clean up read downloads",
+                        onClick = viewModel::cleanupReadDownloads
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    KomaCircularGlassButton(
+                        icon = Icons.Default.ClearAll,
+                        contentDescription = "Clear completed queue",
+                        onClick = viewModel::clearCompletedDownloads
+                    )
+                    Spacer(Modifier.width(8.dp))
                 }
             )
         }
     ) { padding ->
         LazyColumn(
-            modifier = Modifier.fillMaxSize().padding(padding),
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .background(
+                    Brush.verticalGradient(
+                        listOf(
+                            MaterialTheme.colorScheme.background,
+                            MaterialTheme.colorScheme.surfaceContainerLowest
+                        )
+                    )
+                ),
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             item {
-                Surface(
-                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                    shape = MaterialTheme.shapes.large
+                KomaElevatedCard(
+                    shape = RoundedCornerShape(22.dp),
+                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
                 ) {
-                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("Offline Storage", style = MaterialTheme.typography.titleMedium)
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text("Offline Storage", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                         val usedMb = state.stats.downloadedBytes / (1024f * 1024f)
                         val limitMb = state.prefs.downloadStorageLimitMb.coerceAtLeast(1)
                         Text(
@@ -68,10 +94,17 @@ fun DownloadsScreen(
                         )
                         LinearProgressIndicator(
                             progress = { (usedMb / limitMb.toFloat()).coerceIn(0f, 1f) },
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(6.dp)
+                                .clip(CircleShape),
+                            color = MaterialTheme.colorScheme.primary
                         )
                         if (state.storageBySource.isNotEmpty()) {
-                            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                            HorizontalDivider(
+                                modifier = Modifier.padding(vertical = 2.dp),
+                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)
+                            )
                             Text("Storage by Source", style = MaterialTheme.typography.labelLarge)
                             state.storageBySource.forEach { (sourceId, bytes) ->
                                 val mb = bytes / (1024f * 1024f)
@@ -104,20 +137,23 @@ fun DownloadsScreen(
             }
 
             if (state.downloadQueue.isNotEmpty()) {
-                item { Text("Download Queue (${state.downloadQueue.size})", style = MaterialTheme.typography.titleSmall) }
+                item {
+                    Text(
+                        "Download Queue (${state.downloadQueue.size})",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
                 items(state.downloadQueue, key = { it.chapterId }) { task ->
-                    Surface(
-                        color = MaterialTheme.colorScheme.surfaceContainer,
-                        shape = MaterialTheme.shapes.medium
-                    ) {
-                        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    KomaElevatedCard(shape = RoundedCornerShape(18.dp)) {
+                        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Column(modifier = Modifier.weight(1f)) {
-                                    Text(task.mangaTitle, style = MaterialTheme.typography.titleSmall)
+                                    Text(task.mangaTitle, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
                                     val retryLabel = if (task.retryCount > 0) " • Retry ${task.retryCount}" else ""
                                     Text(
                                         "${task.chapterName} • ${task.status} (${task.downloadedPages}/${task.totalPages})$retryLabel",
@@ -150,7 +186,11 @@ fun DownloadsScreen(
                             }
                             LinearProgressIndicator(
                                 progress = { task.progress.coerceIn(0f, 1f) },
-                                modifier = Modifier.fillMaxWidth()
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(5.dp)
+                                    .clip(CircleShape),
+                                color = MaterialTheme.colorScheme.primary
                             )
                             task.errorMessage?.let { err ->
                                 Text(err, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
@@ -160,7 +200,13 @@ fun DownloadsScreen(
                 }
             }
 
-            item { Text("Downloaded Offline Chapters (${state.downloadedChapters.size})", style = MaterialTheme.typography.titleSmall) }
+            item {
+                Text(
+                    "Downloaded Offline Chapters (${state.downloadedChapters.size})",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold
+                )
+            }
             if (state.downloadedChapters.isEmpty()) {
                 item {
                     KomaEmptyState(
@@ -171,20 +217,30 @@ fun DownloadsScreen(
                 }
             } else {
                 items(state.downloadedChapters, key = { "offline_${it.id}" }) { ch ->
-                    Surface(
-                        color = MaterialTheme.colorScheme.surfaceContainer,
-                        shape = MaterialTheme.shapes.medium,
-                        modifier = Modifier.fillMaxWidth().clickable { onOpenReader(ch.mangaId, ch.id) }
+                    KomaElevatedCard(
+                        shape = RoundedCornerShape(18.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = { onOpenReader(ch.mangaId, ch.id) }
                     ) {
-                        ListItem(
-                            headlineContent = { Text(ch.name) },
-                            supportingContent = { Text("${ch.sizeBytes / 1024} KB • Offline Ready") },
-                            trailingContent = {
-                                IconButton(onClick = { viewModel.deleteDownloadedChapter(ch) }) {
-                                    Icon(Icons.Default.DeleteOutline, contentDescription = "Delete download")
-                                }
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(ch.name, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Medium)
+                                Text(
+                                    "${ch.sizeBytes / 1024} KB • Offline Ready",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
                             }
-                        )
+                            IconButton(onClick = { viewModel.deleteDownloadedChapter(ch) }) {
+                                Icon(Icons.Default.DeleteOutline, contentDescription = "Delete download")
+                            }
+                        }
                     }
                 }
             }

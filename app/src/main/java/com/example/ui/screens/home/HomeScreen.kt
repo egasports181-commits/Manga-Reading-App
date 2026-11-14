@@ -8,6 +8,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -17,6 +18,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.domain.model.HomeSectionType
@@ -34,30 +36,33 @@ fun HomeScreen(
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     var showCustomizeSheet by remember { mutableStateOf(false) }
-    val cardWidth = if (state.compactCards) 118.dp else 144.dp
+    val cardWidth = if (state.compactCards) 122.dp else 148.dp
 
     Scaffold(
         topBar = {
             LiquidGlassTopBar(
-                title = if (state.demoModeEnabled) "Koma • Demo Mode" else "Koma",
+                title = if (state.demoModeEnabled) "Koma • Demo" else "Koma",
                 subtitle = if (state.continueReading.isNotEmpty()) {
-                    "${state.continueReading.size} active series • ${state.favoriteSources.size} sources ready"
+                    "${state.continueReading.size} active series • ${state.favoriteSources.size} sources"
                 } else {
                     "${state.favoriteSources.size} active sources"
                 },
+                showBrandMark = true,
                 actions = {
-                    IconButton(
+                    KomaCircularGlassButton(
+                        icon = Icons.Default.Refresh,
+                        contentDescription = "Refresh dashboard",
                         onClick = { viewModel.refreshLiveFeeds() },
                         modifier = Modifier.testTag("home_refresh_button")
-                    ) {
-                        Icon(Icons.Default.Refresh, contentDescription = "Refresh dashboard")
-                    }
-                    IconButton(
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    KomaCircularGlassButton(
+                        icon = Icons.Default.Tune,
+                        contentDescription = "Customize home sections",
                         onClick = { showCustomizeSheet = true },
                         modifier = Modifier.testTag("home_customize_button")
-                    ) {
-                        Icon(Icons.Default.Tune, contentDescription = "Customize home sections")
-                    }
+                    )
+                    Spacer(Modifier.width(8.dp))
                 }
             )
         }
@@ -74,14 +79,20 @@ fun HomeScreen(
                         )
                     )
                 ),
-            contentPadding = PaddingValues(top = 12.dp, bottom = 104.dp),
-            verticalArrangement = Arrangement.spacedBy(18.dp)
+            contentPadding = PaddingValues(top = 12.dp, bottom = 112.dp),
+            verticalArrangement = Arrangement.spacedBy(20.dp)
         ) {
-            item {
-                DemoModeBanner(
-                    enabled = state.demoModeEnabled,
-                    onToggleDemoMode = viewModel::toggleDemoMode
-                )
+            val quickStripItems = (state.continueReading + state.recentlyUpdated)
+                .distinctBy { it.id }
+                .take(10)
+            if (quickStripItems.isNotEmpty()) {
+                item(key = "quick_resume_strip") {
+                    QuickResumeAvatarStrip(
+                        title = "Your Shelf",
+                        items = quickStripItems,
+                        onItemClick = { card -> viewModel.openSourceManga(card, onOpenManga) }
+                    )
+                }
             }
 
             if (state.feedError != null) {
@@ -95,12 +106,14 @@ fun HomeScreen(
 
             if (state.isLoadingLiveFeeds && state.popularManga.isEmpty()) {
                 item {
-                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
                         Text(
-                            text = "Fetching Catalogs...",
+                            text = "Discovering Series",
                             style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
                             modifier = Modifier.padding(horizontal = 16.dp)
                         )
+                        FeaturedHeroSkeletonRow()
                         MangaCardSkeletonRow()
                     }
                 }
@@ -118,7 +131,7 @@ fun HomeScreen(
                 item {
                     KomaEmptyState(
                         title = "Your Desk is Ready",
-                        subtitle = "Browse live manga sources, import local CBZ archives, or toggle Demo Mode above to explore sample chapters.",
+                        subtitle = "Browse live manga sources, import local CBZ archives, or enable Demo Mode below to explore sample chapters.",
                         actionLabel = "Browse Sources",
                         onAction = onNavigateToSources
                     )
@@ -130,14 +143,30 @@ fun HomeScreen(
                     viewModel.openSourceManga(card, onOpenManga)
                 }
                 when (section) {
-                    HomeSectionType.CONTINUE_READING -> HorizontalMangaSection(
-                        title = section.title,
-                        icon = Icons.Default.PlayCircleOutline,
-                        items = state.continueReading,
-                        onItemClick = onCardClick,
-                        onActionClick = onNavigateToLibrary,
-                        cardWidth = cardWidth
-                    )
+                    HomeSectionType.CONTINUE_READING -> {
+                        if (!state.compactCards && state.continueReading.isNotEmpty()) {
+                            FeaturedHeroMangaSection(
+                                title = section.title,
+                                icon = Icons.Default.PlayArrow,
+                                items = state.continueReading,
+                                onItemClick = onCardClick,
+                                badgeProvider = { card ->
+                                    val pct = ((card.progressFraction ?: 0f) * 100).toInt()
+                                    if (pct > 0) "RESUME $pct%" else "READING"
+                                },
+                                onActionClick = onNavigateToLibrary
+                            )
+                        } else {
+                            HorizontalMangaSection(
+                                title = section.title,
+                                icon = Icons.Default.PlayCircleOutline,
+                                items = state.continueReading,
+                                onItemClick = onCardClick,
+                                onActionClick = onNavigateToLibrary,
+                                cardWidth = cardWidth
+                            )
+                        }
+                    }
                     HomeSectionType.FAVORITE_SOURCES -> if (state.favoriteSources.isNotEmpty()) {
                         FavoriteSourcesStrip(
                             sources = state.favoriteSources,
@@ -160,14 +189,27 @@ fun HomeScreen(
                         onActionClick = onNavigateToLibrary,
                         cardWidth = cardWidth
                     )
-                    HomeSectionType.POPULAR_MANGA -> HorizontalMangaSection(
-                        title = section.title,
-                        icon = Icons.Default.Whatshot,
-                        items = state.popularManga,
-                        onItemClick = onCardClick,
-                        onActionClick = onNavigateToSources,
-                        cardWidth = cardWidth
-                    )
+                    HomeSectionType.POPULAR_MANGA -> {
+                        if (!state.compactCards && state.continueReading.isEmpty() && state.popularManga.isNotEmpty()) {
+                            FeaturedHeroMangaSection(
+                                title = section.title,
+                                icon = Icons.Default.Whatshot,
+                                items = state.popularManga,
+                                onItemClick = onCardClick,
+                                badgeProvider = { "POPULAR" },
+                                onActionClick = onNavigateToSources
+                            )
+                        } else {
+                            HorizontalMangaSection(
+                                title = section.title,
+                                icon = Icons.Default.Whatshot,
+                                items = state.popularManga,
+                                onItemClick = onCardClick,
+                                onActionClick = onNavigateToSources,
+                                cardWidth = cardWidth
+                            )
+                        }
+                    }
                     HomeSectionType.TRENDING_MANGA -> HorizontalMangaSection(
                         title = section.title,
                         icon = Icons.Default.TrendingUp,
@@ -213,6 +255,13 @@ fun HomeScreen(
                     )
                 }
             }
+
+            item(key = "demo_banner") {
+                DemoModeBanner(
+                    enabled = state.demoModeEnabled,
+                    onToggleDemoMode = viewModel::toggleDemoMode
+                )
+            }
         }
     }
 
@@ -228,15 +277,15 @@ fun HomeScreen(
                     text = "Customize Home Layout",
                     style = MaterialTheme.typography.headlineSmall
                 )
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(10.dp))
                 Surface(
                     color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                    shape = MaterialTheme.shapes.medium
+                    shape = RoundedCornerShape(18.dp)
                 ) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                            .padding(horizontal = 14.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
@@ -257,13 +306,13 @@ fun HomeScreen(
                 Spacer(Modifier.height(12.dp))
                 LazyColumn(
                     modifier = Modifier.heightIn(max = 380.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     itemsIndexed(state.sectionOrder, key = { _, s -> s.id }) { index, section ->
                         val visible = section.id !in state.hiddenSections
                         Surface(
                             color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                            shape = MaterialTheme.shapes.medium
+                            shape = RoundedCornerShape(16.dp)
                         ) {
                             Row(
                                 modifier = Modifier
@@ -308,20 +357,13 @@ private fun FavoriteSourcesStrip(
     onOpenSource: (String) -> Unit,
     onSeeAll: () -> Unit
 ) {
-    Column(modifier = Modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Icon(Icons.Default.Explore, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
-                Text("Favorite Sources", style = MaterialTheme.typography.titleMedium)
-            }
-            TextButton(onClick = onSeeAll) { Text("All sources") }
-        }
+    Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        KomaSectionHeader(
+            title = "Active Sources",
+            icon = Icons.Default.Explore,
+            onActionClick = onSeeAll,
+            actionLabel = "All sources"
+        )
         LazyRow(
             contentPadding = PaddingValues(horizontal = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -329,25 +371,33 @@ private fun FavoriteSourcesStrip(
             items(sources, key = { it.id }) { src ->
                 Surface(
                     color = MaterialTheme.colorScheme.surfaceContainer,
-                    shape = RoundedCornerShape(14.dp),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)),
+                    shape = RoundedCornerShape(18.dp),
+                    border = BorderStroke(0.75.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
                     modifier = Modifier.clickable { onOpenSource(src.id) }
                 ) {
                     Row(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                        modifier = Modifier.padding(horizontal = 13.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        Icon(
-                            imageVector = when {
-                                src.id == "local_saf" -> Icons.Default.FolderZip
-                                src.isDemo -> Icons.Default.Science
-                                else -> Icons.Default.Public
-                            },
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(18.dp)
-                        )
+                        Surface(
+                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
+                            shape = CircleShape,
+                            modifier = Modifier.size(34.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = when {
+                                        src.id == "local_saf" -> Icons.Default.FolderZip
+                                        src.isDemo -> Icons.Default.Science
+                                        else -> Icons.Default.Public
+                                    },
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
                         Column {
                             Text(src.name, style = MaterialTheme.typography.labelLarge)
                             Text(

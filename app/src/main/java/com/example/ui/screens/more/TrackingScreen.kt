@@ -1,8 +1,11 @@
 package com.example.ui.screens.more
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
@@ -11,10 +14,15 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.domain.model.TrackerService
+import com.example.ui.components.KomaCircularGlassButton
+import com.example.ui.components.KomaElevatedCard
+import com.example.ui.components.LiquidGlassTopBar
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -27,27 +35,47 @@ fun TrackingScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
+            LiquidGlassTopBar(
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
+                    KomaCircularGlassButton(
+                        icon = Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = "Back",
+                        onClick = onBack,
+                        modifier = Modifier.padding(start = 8.dp)
+                    )
                 },
-                title = { Text("Tracking Services") }
+                title = "Tracking Services",
+                subtitle = "Sync chapters with external trackers"
             )
         }
     ) { padding ->
         LazyColumn(
-            modifier = Modifier.fillMaxSize().padding(padding),
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .background(
+                    Brush.verticalGradient(
+                        listOf(
+                            MaterialTheme.colorScheme.background,
+                            MaterialTheme.colorScheme.surfaceContainerLowest
+                        )
+                    )
+                ),
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             item {
-                Text(
-                    "Connect personal OAuth Bearer tokens to sync reading progress with supported trackers. Services without configured OAuth apps operate honestly as local ledgers until connected.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                KomaElevatedCard(
+                    shape = RoundedCornerShape(18.dp),
+                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                ) {
+                    Text(
+                        "Connect personal OAuth Bearer tokens to sync reading progress with supported trackers. Services without configured OAuth apps operate honestly as local ledgers until connected.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(14.dp)
+                    )
+                }
             }
 
             items(TrackerService.entries) { service ->
@@ -59,18 +87,20 @@ fun TrackingScreen(
                 }
                 val isConnected = service.supportsOAuthTokenSync && token.isNotBlank()
 
-                Surface(
-                    color = MaterialTheme.colorScheme.surfaceContainer,
-                    shape = MaterialTheme.shapes.medium
-                ) {
+                KomaElevatedCard(shape = RoundedCornerShape(20.dp)) {
                     Row(
-                        modifier = Modifier.fillMaxWidth().padding(14.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Text(service.displayName, style = MaterialTheme.typography.titleMedium)
+                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text(service.displayName, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                                 Icon(
                                     if (isConnected) Icons.Default.CheckCircle else Icons.Default.LinkOff,
                                     contentDescription = null,
@@ -84,12 +114,19 @@ fun TrackingScreen(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
+                        Spacer(Modifier.width(10.dp))
                         if (service.supportsOAuthTokenSync) {
-                            OutlinedButton(onClick = { editingService = service }) {
-                                Text(if (isConnected) "Manage" else "Connect")
+                            if (isConnected) {
+                                FilledTonalButton(onClick = { editingService = service }, shape = CircleShape) {
+                                    Text("Manage")
+                                }
+                            } else {
+                                Button(onClick = { editingService = service }, shape = CircleShape) {
+                                    Text("Connect")
+                                }
                             }
                         } else {
-                            AssistChip(onClick = {}, label = { Text("Local") })
+                            AssistChip(onClick = {}, label = { Text("Local") }, shape = CircleShape)
                         }
                     }
                 }
@@ -101,11 +138,12 @@ fun TrackingScreen(
         var tokenInput by remember { mutableStateOf("") }
         AlertDialog(
             onDismissRequest = { editingService = null },
+            shape = RoundedCornerShape(24.dp),
             title = { Text("Connect ${svc.displayName}") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
-                        "Paste your personal ${svc.displayName} OAuth Bearer Access Token. Leave empty and tap Clear to disconnect.",
+                        "Paste your personal ${svc.displayName} OAuth Bearer Access Token. Leave empty and tap Disconnect to unlink.",
                         style = MaterialTheme.typography.bodySmall
                     )
                     OutlinedTextField(
@@ -113,15 +151,19 @@ fun TrackingScreen(
                         onValueChange = { tokenInput = it },
                         label = { Text("Bearer Access Token") },
                         visualTransformation = PasswordVisualTransformation(),
-                        singleLine = true
+                        singleLine = true,
+                        shape = RoundedCornerShape(14.dp)
                     )
                 }
             },
             confirmButton = {
-                Button(onClick = {
-                    viewModel.setTrackerToken(svc, tokenInput)
-                    editingService = null
-                }) { Text("Save Token") }
+                Button(
+                    onClick = {
+                        viewModel.setTrackerToken(svc, tokenInput)
+                        editingService = null
+                    },
+                    shape = CircleShape
+                ) { Text("Save Token") }
             },
             dismissButton = {
                 TextButton(onClick = {

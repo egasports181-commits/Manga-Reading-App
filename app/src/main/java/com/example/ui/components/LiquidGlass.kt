@@ -4,6 +4,7 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -23,12 +24,15 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.R
 
 @Composable
 fun rememberIsDarkSurface(): Boolean =
@@ -41,15 +45,15 @@ fun liquidGlassBackgroundBrush(): Brush {
     return if (isDark) {
         Brush.verticalGradient(
             colors = listOf(
-                base.copy(alpha = 0.86f),
-                MaterialTheme.colorScheme.surface.copy(alpha = 0.78f)
+                base.copy(alpha = 0.88f),
+                MaterialTheme.colorScheme.surface.copy(alpha = 0.82f)
             )
         )
     } else {
         Brush.verticalGradient(
             colors = listOf(
-                Color.White.copy(alpha = 0.88f),
-                MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.80f)
+                Color.White.copy(alpha = 0.92f),
+                MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.86f)
             )
         )
     }
@@ -59,16 +63,16 @@ fun liquidGlassBackgroundBrush(): Brush {
 fun liquidGlassBorderStroke(width: Dp = 0.75.dp): BorderStroke {
     val isDark = rememberIsDarkSurface()
     val color = if (isDark) {
-        Color.White.copy(alpha = 0.16f)
+        Color.White.copy(alpha = 0.14f)
     } else {
-        Color.Black.copy(alpha = 0.08f)
+        Color.Black.copy(alpha = 0.07f)
     }
     return BorderStroke(width, color)
 }
 
 /**
- * Subtle translucent Apple-inspired Liquid Glass container for navigation chrome,
- * toolbars, floating controls, search bars, and overlay pills (never used on content cards).
+ * Refined translucent glass container for floating navigation chrome, headers,
+ * search capsules, and overlay pills.
  */
 @Composable
 fun LiquidGlassSurface(
@@ -76,23 +80,24 @@ fun LiquidGlassSurface(
     shape: Shape = RoundedCornerShape(24.dp),
     shadowElevation: Dp = 10.dp,
     borderWidth: Dp = 0.75.dp,
+    tintOverlay: Color? = null,
     content: @Composable BoxScope.() -> Unit
 ) {
     val isDark = rememberIsDarkSurface()
-    val borderColor = if (isDark) Color.White.copy(alpha = 0.15f) else Color.Black.copy(alpha = 0.08f)
-    val topSpecular = if (isDark) Color.White.copy(alpha = 0.07f) else Color.White.copy(alpha = 0.55f)
-    val baseBg = if (isDark) {
-        MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.82f)
+    val borderColor = if (isDark) Color.White.copy(alpha = 0.14f) else Color.Black.copy(alpha = 0.08f)
+    val topSpecular = if (isDark) Color.White.copy(alpha = 0.08f) else Color.White.copy(alpha = 0.65f)
+    val baseBg = tintOverlay ?: if (isDark) {
+        Color(0xFF1A1C24).copy(alpha = 0.86f)
     } else {
-        Color.White.copy(alpha = 0.84f)
+        Color(0xFFFFFFFF).copy(alpha = 0.88f)
     }
 
     Surface(
         modifier = modifier.shadow(
             elevation = shadowElevation,
             shape = shape,
-            ambientColor = Color.Black.copy(alpha = 0.28f),
-            spotColor = Color.Black.copy(alpha = 0.28f)
+            ambientColor = Color.Black.copy(alpha = if (isDark) 0.36f else 0.14f),
+            spotColor = Color.Black.copy(alpha = if (isDark) 0.36f else 0.14f)
         ),
         shape = shape,
         color = Color.Transparent,
@@ -103,7 +108,7 @@ fun LiquidGlassSurface(
                 .background(
                     Brush.verticalGradient(
                         colors = listOf(
-                            baseBg.copy(alpha = (baseBg.alpha + 0.05f).coerceAtMost(0.95f)),
+                            baseBg.copy(alpha = (baseBg.alpha + 0.06f).coerceAtMost(0.96f)),
                             baseBg
                         )
                     )
@@ -111,10 +116,72 @@ fun LiquidGlassSurface(
                 .background(
                     Brush.verticalGradient(
                         colors = listOf(topSpecular, Color.Transparent),
-                        endY = 40f
+                        endY = 48f
                     )
                 ),
             content = content
+        )
+    }
+}
+
+/**
+ * Layered rounded card container with subtle hairline border for consistent depth
+ * across Dark and Light themes.
+ */
+@Composable
+fun KomaElevatedCard(
+    modifier: Modifier = Modifier,
+    shape: Shape = RoundedCornerShape(20.dp),
+    containerColor: Color = MaterialTheme.colorScheme.surfaceContainer,
+    borderColor: Color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f),
+    onClick: (() -> Unit)? = null,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    val clickableMod = if (onClick != null) {
+        Modifier.clip(shape).clickable(onClick = onClick)
+    } else {
+        Modifier
+    }
+    Surface(
+        modifier = modifier.then(clickableMod),
+        shape = shape,
+        color = containerColor,
+        border = BorderStroke(0.75.dp, borderColor),
+        tonalElevation = 1.dp
+    ) {
+        Column(content = content)
+    }
+}
+
+/**
+ * Circular frosted icon button for headers and directional controls, enforcing >= 48.dp touch target.
+ */
+@Composable
+fun KomaCircularGlassButton(
+    icon: ImageVector,
+    contentDescription: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    tint: Color = MaterialTheme.colorScheme.onSurface,
+    containerSize: Dp = 40.dp
+) {
+    val isDark = rememberIsDarkSurface()
+    Box(
+        modifier = modifier
+            .minimumInteractiveComponentSize()
+            .size(containerSize)
+            .clip(CircleShape)
+            .background(
+                if (isDark) Color.White.copy(alpha = 0.08f) else Color.Black.copy(alpha = 0.05f)
+            )
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = contentDescription,
+            tint = tint,
+            modifier = Modifier.size(20.dp)
         )
     }
 }
@@ -125,14 +192,15 @@ fun LiquidGlassTopBar(
     title: String,
     modifier: Modifier = Modifier,
     subtitle: String? = null,
+    showBrandMark: Boolean = false,
     navigationIcon: @Composable (() -> Unit) = {},
     actions: @Composable RowScope.() -> Unit = {}
 ) {
     val isDark = rememberIsDarkSurface()
     val barBg = if (isDark) {
-        MaterialTheme.colorScheme.surface.copy(alpha = 0.82f)
+        MaterialTheme.colorScheme.background.copy(alpha = 0.90f)
     } else {
-        Color.White.copy(alpha = 0.86f)
+        MaterialTheme.colorScheme.background.copy(alpha = 0.92f)
     }
     Column(
         modifier = modifier
@@ -141,22 +209,44 @@ fun LiquidGlassTopBar(
     ) {
         TopAppBar(
             title = {
-                Column {
-                    Text(
-                        text = title,
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    if (!subtitle.isNullOrBlank()) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    if (showBrandMark) {
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            border = BorderStroke(
+                                1.dp,
+                                MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)
+                            ),
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Image(
+                                painter = painterResource(id = R.drawable.ic_koma_logo),
+                                contentDescription = "Koma logo",
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+                    }
+                    Column {
                         Text(
-                            text = subtitle,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            text = title,
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
+                        if (!subtitle.isNullOrBlank()) {
+                            Text(
+                                text = subtitle,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
                     }
                 }
             },
@@ -169,7 +259,7 @@ fun LiquidGlassTopBar(
         )
         HorizontalDivider(
             thickness = 0.5.dp,
-            color = if (isDark) Color.White.copy(alpha = 0.10f) else Color.Black.copy(alpha = 0.06f)
+            color = if (isDark) Color.White.copy(alpha = 0.08f) else Color.Black.copy(alpha = 0.06f)
         )
     }
 }
@@ -190,6 +280,7 @@ fun LiquidGlassFloatingNavBar(
     onSelect: (GlassNavTab) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val isDark = rememberIsDarkSurface()
     Box(
         modifier = modifier
             .fillMaxWidth()
@@ -201,8 +292,13 @@ fun LiquidGlassFloatingNavBar(
             modifier = Modifier
                 .fillMaxWidth()
                 .widthIn(max = 520.dp),
-            shape = RoundedCornerShape(28.dp),
-            shadowElevation = 14.dp
+            shape = RoundedCornerShape(30.dp),
+            shadowElevation = 16.dp,
+            tintOverlay = if (isDark) {
+                Color(0xFF171922).copy(alpha = 0.88f)
+            } else {
+                Color(0xFFFCFBF9).copy(alpha = 0.92f)
+            }
         ) {
             Row(
                 modifier = Modifier
@@ -215,7 +311,7 @@ fun LiquidGlassFloatingNavBar(
                     val selected = tab.id == selectedId
                     val pillColor by animateColorAsState(
                         targetValue = if (selected) {
-                            MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
+                            MaterialTheme.colorScheme.primary.copy(alpha = if (isDark) 0.22f else 0.14f)
                         } else {
                             Color.Transparent
                         },
@@ -235,7 +331,7 @@ fun LiquidGlassFloatingNavBar(
                         modifier = Modifier
                             .weight(1f)
                             .heightIn(min = 48.dp)
-                            .clip(RoundedCornerShape(22.dp))
+                            .clip(RoundedCornerShape(24.dp))
                             .background(pillColor)
                             .clickable(
                                 interactionSource = remember { MutableInteractionSource() },
@@ -271,7 +367,7 @@ fun LiquidGlassFloatingNavBar(
                                 text = tab.label,
                                 fontSize = 11.sp,
                                 lineHeight = 13.sp,
-                                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
                                 color = contentColor,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis

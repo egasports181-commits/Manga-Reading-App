@@ -4,6 +4,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -20,6 +21,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.AppContainer
 import com.example.network.DnsMode
 import com.example.network.NetworkErrorFormatter
+import com.example.ui.components.KomaCircularGlassButton
 import com.example.ui.components.LiquidGlassTopBar
 import com.example.ui.theme.StatusCompleted
 import com.example.ui.theme.StatusError
@@ -115,14 +117,22 @@ fun NetworkDiagnosticsScreen(
                 title = "Network & Repo Diagnostics",
                 subtitle = "${health.transportLabel} • ${prefs.dnsMode.label}",
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    Row {
+                        Spacer(Modifier.width(6.dp))
+                        KomaCircularGlassButton(
+                            icon = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back",
+                            onClick = onBack
+                        )
                     }
                 },
                 actions = {
-                    IconButton(onClick = { container.networkDiagnostics.clearLogs() }) {
-                        Icon(Icons.Default.DeleteSweep, contentDescription = "Clear logs")
-                    }
+                    KomaCircularGlassButton(
+                        icon = Icons.Default.DeleteSweep,
+                        contentDescription = "Clear logs",
+                        onClick = { container.networkDiagnostics.clearLogs() }
+                    )
+                    Spacer(Modifier.width(8.dp))
                 }
             )
         }
@@ -137,36 +147,55 @@ fun NetworkDiagnosticsScreen(
             item {
                 Surface(
                     color = MaterialTheme.colorScheme.surfaceContainer,
-                    shape = MaterialTheme.shapes.medium,
+                    shape = RoundedCornerShape(20.dp),
                     border = BorderStroke(
-                        1.dp,
-                        if (health.hasActiveNetwork) StatusOngoing.copy(alpha = 0.4f) else StatusError.copy(alpha = 0.4f)
+                        0.75.dp,
+                        if (health.hasActiveNetwork) StatusOngoing.copy(alpha = 0.45f) else StatusError.copy(alpha = 0.45f)
                     )
                 ) {
-                    Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Icon(
-                                if (health.hasActiveNetwork) Icons.Default.Wifi else Icons.Default.WifiOff,
-                                contentDescription = null,
-                                tint = if (health.hasActiveNetwork) StatusOngoing else StatusError
-                            )
-                            Text(
-                                text = if (health.hasActiveNetwork) "Device Network Connected (${health.transportLabel})" else "No Active Internet Transport",
-                                style = MaterialTheme.typography.titleSmall
-                            )
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Surface(
+                                color = (if (health.hasActiveNetwork) StatusOngoing else StatusError).copy(alpha = 0.14f),
+                                shape = CircleShape,
+                                modifier = Modifier.size(36.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        if (health.hasActiveNetwork) Icons.Default.Wifi else Icons.Default.WifiOff,
+                                        contentDescription = null,
+                                        tint = if (health.hasActiveNetwork) StatusOngoing else StatusError,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+                            Column {
+                                Text(
+                                    text = if (health.hasActiveNetwork) "Connected (${health.transportLabel})" else "No Active Internet Transport",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = "Validated: ${if (health.isValidated) "Yes" else "No"} • Metered: ${if (health.isMetered) "Yes" else "No"} • IPv4 Preferred: ${if (prefs.preferIpv4) "On" else "Off"}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
-                        Text(
-                            text = "Validated: ${if (health.isValidated) "Yes" else "No"} • Metered: ${if (health.isMetered) "Yes" else "No"} • IPv4 Preferred: ${if (prefs.preferIpv4) "On" else "Off"}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(onClick = ::runConnectivityProbes, enabled = !isProbing) {
+                            Button(
+                                onClick = ::runConnectivityProbes,
+                                enabled = !isProbing,
+                                shape = CircleShape
+                            ) {
                                 Icon(Icons.Default.NetworkCheck, contentDescription = null, modifier = Modifier.size(18.dp))
                                 Spacer(Modifier.width(6.dp))
                                 Text(if (isProbing) "Testing..." else "Test Live Endpoints")
                             }
-                            OutlinedButton(onClick = { sourcesViewModel.refreshAllEnabledRepos(onlyFailed = true) }) {
+                            OutlinedButton(
+                                onClick = { sourcesViewModel.refreshAllEnabledRepos(onlyFailed = true) },
+                                shape = CircleShape
+                            ) {
                                 Text("Retry Failed Repos")
                             }
                         }
@@ -177,13 +206,13 @@ fun NetworkDiagnosticsScreen(
             item {
                 Surface(
                     color = MaterialTheme.colorScheme.surfaceContainer,
-                    shape = MaterialTheme.shapes.medium,
+                    shape = RoundedCornerShape(20.dp),
                     border = BorderStroke(
-                        1.dp,
+                        0.75.dp,
                         if (tlsCaps.tls13Supported) StatusOngoing.copy(alpha = 0.35f) else StatusError.copy(alpha = 0.45f)
                     )
                 ) {
-                    Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -196,7 +225,8 @@ fun NetworkDiagnosticsScreen(
                             )
                             Text(
                                 text = "Client TLS Stack (${tlsCaps.providerName}${if (tlsCaps.usingConscrypt) " • Bundled" else ""})",
-                                style = MaterialTheme.typography.titleSmall
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold
                             )
                         }
                         Text(
@@ -217,10 +247,11 @@ fun NetworkDiagnosticsScreen(
             item {
                 Surface(
                     color = MaterialTheme.colorScheme.surfaceContainer,
-                    shape = MaterialTheme.shapes.medium
+                    shape = RoundedCornerShape(20.dp),
+                    border = BorderStroke(0.75.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
                 ) {
-                    Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("DNS Resolver & Carrier Bypass", style = MaterialTheme.typography.titleSmall)
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("DNS Resolver & Carrier Bypass", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
                         Text(
                             "If mobile carriers or Wi-Fi routers block raw GitHub or MangaDex DNS, switch to Cloudflare or Google DoH below.",
                             style = MaterialTheme.typography.bodySmall,
@@ -256,11 +287,11 @@ fun NetworkDiagnosticsScreen(
             }
 
             if (probeResults.isNotEmpty()) {
-                item { Text("Endpoint Probe Results", style = MaterialTheme.typography.titleSmall) }
+                item { Text("Endpoint Probe Results", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold) }
                 items(probeResults, key = { it.url }) { probe ->
                     Surface(
                         color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                        shape = RoundedCornerShape(12.dp)
+                        shape = RoundedCornerShape(16.dp)
                     ) {
                         Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Row(
@@ -293,13 +324,14 @@ fun NetworkDiagnosticsScreen(
             }
 
             item {
-                Text("Repository Sync Health (${sourceState.repos.size})", style = MaterialTheme.typography.titleSmall)
+                Text("Repository Sync Health (${sourceState.repos.size})", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
             }
             items(sourceState.repos, key = { "diag_repo_${it.id}" }) { repo ->
                 val hasErr = !repo.lastError.isNullOrBlank()
                 Surface(
                     color = MaterialTheme.colorScheme.surfaceContainer,
-                    shape = RoundedCornerShape(12.dp)
+                    shape = RoundedCornerShape(16.dp),
+                    border = BorderStroke(0.75.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
                 ) {
                     Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Row(
@@ -345,7 +377,7 @@ fun NetworkDiagnosticsScreen(
             }
 
             item {
-                Text("Recent HTTP Requests (${logs.size})", style = MaterialTheme.typography.titleSmall)
+                Text("Recent HTTP Requests (${logs.size})", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
             }
             if (logs.isEmpty()) {
                 item {
@@ -363,7 +395,7 @@ fun NetworkDiagnosticsScreen(
                     }
                     Surface(
                         color = MaterialTheme.colorScheme.surfaceContainer,
-                        shape = RoundedCornerShape(10.dp)
+                        shape = RoundedCornerShape(14.dp)
                     ) {
                         Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                             Row(

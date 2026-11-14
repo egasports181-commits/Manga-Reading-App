@@ -1,8 +1,12 @@
 package com.example.ui.theme
 
+import android.app.Activity
 import android.os.Build
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.darkColorScheme
@@ -10,9 +14,12 @@ import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
+import androidx.core.view.WindowCompat
 
 enum class ThemeMode(val id: String, val label: String) {
     SYSTEM("system", "System Default"),
@@ -25,11 +32,11 @@ enum class ThemeMode(val id: String, val label: String) {
 }
 
 val KomaShapes = Shapes(
-    extraSmall = RoundedCornerShape(6.dp),
-    small = RoundedCornerShape(10.dp),
-    medium = RoundedCornerShape(14.dp),
-    large = RoundedCornerShape(20.dp),
-    extraLarge = RoundedCornerShape(28.dp)
+    extraSmall = RoundedCornerShape(8.dp),
+    small = RoundedCornerShape(12.dp),
+    medium = RoundedCornerShape(18.dp),
+    large = RoundedCornerShape(24.dp),
+    extraLarge = RoundedCornerShape(30.dp)
 )
 
 @Composable
@@ -37,7 +44,7 @@ fun KomaTheme(
     themeMode: ThemeMode = ThemeMode.DARK,
     amoledBlack: Boolean = false,
     dynamicColor: Boolean = false,
-    accentPreset: AccentPreset = AccentPreset.CRIMSON_INK,
+    accentPreset: AccentPreset = AccentPreset.WARM_ORANGE,
     content: @Composable () -> Unit
 ) {
     val isDark = when (themeMode) {
@@ -67,22 +74,25 @@ fun KomaTheme(
             onSurface = InkWhite,
             surfaceVariant = ObsidianSurfaceHigh,
             onSurfaceVariant = InkMuted,
-            surfaceContainerLowest = ObsidianBg,
+            surfaceContainerLowest = ObsidianSurfaceLowest,
             surfaceContainerLow = ObsidianSurface,
             surfaceContainer = ObsidianSurfaceHigh,
             surfaceContainerHigh = ObsidianSurfaceHighest,
+            surfaceContainerHighest = Color(0xFF2D3242),
             outline = ObsidianOutline,
-            outlineVariant = ObsidianOutline.copy(alpha = 0.6f),
+            outlineVariant = ObsidianOutline.copy(alpha = 0.55f),
             error = StatusError,
             onError = Color.White
         )
         else -> lightColorScheme(
-            primary = accentPreset.primary,
-            onPrimary = accentPreset.onPrimary,
-            primaryContainer = accentPreset.primary.copy(alpha = 0.14f),
-            onPrimaryContainer = accentPreset.primary,
+            primary = accentPreset.lightPrimary,
+            onPrimary = Color.White,
+            primaryContainer = accentPreset.lightPrimaryContainer,
+            onPrimaryContainer = accentPreset.lightPrimary,
             secondary = accentPreset.secondary,
-            onSecondary = Color.White,
+            onSecondary = DaylightInk,
+            secondaryContainer = DaylightSurfaceHigh,
+            onSecondaryContainer = DaylightInk,
             tertiary = accentPreset.tertiary,
             background = DaylightBg,
             onBackground = DaylightInk,
@@ -90,30 +100,68 @@ fun KomaTheme(
             onSurface = DaylightInk,
             surfaceVariant = DaylightSurfaceHigh,
             onSurfaceVariant = DaylightMuted,
+            surfaceContainerLowest = DaylightSurfaceLowest,
+            surfaceContainerLow = DaylightSurface,
+            surfaceContainer = DaylightSurfaceLowest,
+            surfaceContainerHigh = DaylightSurfaceHigh,
+            surfaceContainerHighest = DaylightSurfaceHighest,
             outline = DaylightOutline,
-            outlineVariant = DaylightOutline.copy(alpha = 0.6f),
+            outlineVariant = DaylightOutline.copy(alpha = 0.65f),
             error = StatusError,
             onError = Color.White
         )
     }
 
-    val finalScheme = if (isDark && amoledBlack) {
+    val targetScheme = if (isDark && amoledBlack) {
         baseScheme.copy(
             background = AmoledBlack,
             surface = AmoledBlack,
             surfaceContainerLowest = AmoledBlack,
-            surfaceContainerLow = Color(0xFF090A0F),
-            surfaceContainer = Color(0xFF10121A),
-            surfaceContainerHigh = Color(0xFF171A24)
+            surfaceContainerLow = Color(0xFF090A0E),
+            surfaceContainer = Color(0xFF11131A),
+            surfaceContainerHigh = Color(0xFF191C25),
+            surfaceContainerHighest = Color(0xFF222633)
         )
     } else {
         baseScheme
     }
 
+    val animatedScheme = animateColorScheme(targetScheme)
+
+    val view = LocalView.current
+    if (!view.isInEditMode) {
+        SideEffect {
+            val window = (view.context as? Activity)?.window
+            if (window != null) {
+                val controller = WindowCompat.getInsetsController(window, view)
+                controller.isAppearanceLightStatusBars = !isDark
+                controller.isAppearanceLightNavigationBars = !isDark
+            }
+        }
+    }
+
     MaterialTheme(
-        colorScheme = finalScheme,
+        colorScheme = animatedScheme,
         typography = KomaTypography,
         shapes = KomaShapes,
         content = content
+    )
+}
+
+@Composable
+private fun animateColorScheme(target: ColorScheme): ColorScheme {
+    val spec = tween<Color>(durationMillis = 240)
+    return target.copy(
+        primary = animateColorAsState(target.primary, spec, label = "primary").value,
+        primaryContainer = animateColorAsState(target.primaryContainer, spec, label = "primaryContainer").value,
+        background = animateColorAsState(target.background, spec, label = "background").value,
+        onBackground = animateColorAsState(target.onBackground, spec, label = "onBackground").value,
+        surface = animateColorAsState(target.surface, spec, label = "surface").value,
+        onSurface = animateColorAsState(target.onSurface, spec, label = "onSurface").value,
+        surfaceContainerLowest = animateColorAsState(target.surfaceContainerLowest, spec, label = "scLowest").value,
+        surfaceContainerLow = animateColorAsState(target.surfaceContainerLow, spec, label = "scLow").value,
+        surfaceContainer = animateColorAsState(target.surfaceContainer, spec, label = "sc").value,
+        surfaceContainerHigh = animateColorAsState(target.surfaceContainerHigh, spec, label = "scHigh").value,
+        surfaceContainerHighest = animateColorAsState(target.surfaceContainerHighest, spec, label = "scHighest").value
     )
 }

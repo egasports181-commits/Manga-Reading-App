@@ -1,5 +1,6 @@
 package com.example.ui.screens.library
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -14,6 +15,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -24,22 +26,27 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.local.entity.CategoryEntity
 import com.example.domain.model.LibrarySort
 import com.example.domain.model.MangaStatus
+import com.example.ui.components.KomaCircularGlassButton
 import com.example.ui.components.KomaEmptyState
 import com.example.ui.components.LiquidGlassTopBar
+import com.example.ui.components.MangaCardUi
 import com.example.ui.components.MangaCoverCard
+import com.example.ui.components.MangaCoverImage
 
 private val CATEGORY_COLOR_PRESETS = listOf(
-    0xFFE11D48L,
+    0xFFE2631DL,
     0xFF2563EBL,
     0xFF059669L,
     0xFFD97706L,
     0xFF7C3AEDL,
-    0xFF0891B2L
+    0xFFE11D48L
 )
 
 private val CATEGORY_ICON_PRESETS = listOf(
@@ -78,7 +85,7 @@ fun LibraryScreen(
         topBar = {
             if (inSelectionMode) {
                 TopAppBar(
-                    title = { Text("${state.selectedMangaIds.size} selected") },
+                    title = { Text("${state.selectedMangaIds.size} selected", fontWeight = FontWeight.Bold) },
                     navigationIcon = {
                         IconButton(onClick = viewModel::clearSelection) {
                             Icon(Icons.Default.Close, contentDescription = "Clear selection")
@@ -113,6 +120,7 @@ fun LibraryScreen(
                             onValueChange = viewModel::updateSearchQuery,
                             placeholder = { Text("Filter library...") },
                             singleLine = true,
+                            shape = RoundedCornerShape(16.dp),
                             modifier = Modifier.fillMaxWidth()
                         )
                     },
@@ -130,27 +138,32 @@ fun LibraryScreen(
                     title = "Library",
                     subtitle = "${state.mangaList.size} series",
                     actions = {
-                        IconButton(onClick = { showSearch = true }) {
-                            Icon(Icons.Default.Search, contentDescription = "Filter library")
-                        }
-                        IconButton(
+                        KomaCircularGlassButton(
+                            icon = Icons.Default.Search,
+                            contentDescription = "Filter library",
+                            onClick = { showSearch = true }
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        KomaCircularGlassButton(
+                            icon = Icons.Default.FilterList,
+                            contentDescription = "Sort and filter",
                             onClick = { showFilterSortSheet = true },
                             modifier = Modifier.testTag("library_filter_button")
-                        ) {
-                            Icon(Icons.Default.FilterList, contentDescription = "Sort and filter")
-                        }
-                        IconButton(
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        KomaCircularGlassButton(
+                            icon = Icons.Default.CreateNewFolder,
+                            contentDescription = "Manage categories",
                             onClick = { showCategoryManager = true },
                             modifier = Modifier.testTag("library_categories_button")
-                        ) {
-                            Icon(Icons.Default.CreateNewFolder, contentDescription = "Manage categories")
-                        }
-                        IconButton(onClick = viewModel::toggleLayoutMode) {
-                            Icon(
-                                if (state.isGridLayout) Icons.Default.ViewList else Icons.Default.GridView,
-                                contentDescription = "Toggle grid/list"
-                            )
-                        }
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        KomaCircularGlassButton(
+                            icon = if (state.isGridLayout) Icons.Default.ViewList else Icons.Default.GridView,
+                            contentDescription = "Toggle grid/list",
+                            onClick = viewModel::toggleLayoutMode
+                        )
+                        Spacer(Modifier.width(8.dp))
                     }
                 )
             }
@@ -164,17 +177,17 @@ fun LibraryScreen(
             state.statusMessage?.let { msg ->
                 Surface(
                     color = MaterialTheme.colorScheme.primaryContainer,
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-                    shape = MaterialTheme.shapes.small
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+                    shape = RoundedCornerShape(14.dp)
                 ) {
                     Row(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Text(msg, style = MaterialTheme.typography.bodySmall)
-                        IconButton(onClick = viewModel::clearStatusMessage, modifier = Modifier.size(20.dp)) {
-                            Icon(Icons.Default.Close, contentDescription = "Dismiss", modifier = Modifier.size(14.dp))
+                        Text(msg, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+                        IconButton(onClick = viewModel::clearStatusMessage, modifier = Modifier.size(24.dp)) {
+                            Icon(Icons.Default.Close, contentDescription = "Dismiss", modifier = Modifier.size(16.dp))
                         }
                     }
                 }
@@ -185,17 +198,20 @@ fun LibraryScreen(
                 selectedTabIndex = if (state.selectedCategoryId == null) 0 else {
                     (state.categories.indexOfFirst { it.id == state.selectedCategoryId } + 1).coerceAtLeast(0)
                 },
-                edgePadding = 16.dp
+                edgePadding = 16.dp,
+                containerColor = Color.Transparent,
+                divider = { HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)) }
             ) {
                 Tab(
                     selected = state.selectedCategoryId == null,
                     onClick = { viewModel.selectCategory(null) },
-                    text = { Text("All") }
+                    text = { Text("All", fontWeight = if (state.selectedCategoryId == null) FontWeight.Bold else FontWeight.Medium) }
                 )
                 state.categories.forEach { cat ->
                     val tint = parseCategoryColor(cat.colorHex, MaterialTheme.colorScheme.primary)
+                    val selected = state.selectedCategoryId == cat.id
                     Tab(
-                        selected = state.selectedCategoryId == cat.id,
+                        selected = selected,
                         onClick = { viewModel.selectCategory(cat.id) },
                         text = {
                             Row(
@@ -208,7 +224,10 @@ fun LibraryScreen(
                                     tint = tint,
                                     modifier = Modifier.size(15.dp)
                                 )
-                                Text(cat.name)
+                                Text(
+                                    cat.name,
+                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+                                )
                             }
                         }
                     )
@@ -220,7 +239,7 @@ fun LibraryScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -235,12 +254,14 @@ fun LibraryScreen(
                     FilterChip(
                         selected = state.smartView == key,
                         onClick = { viewModel.setSmartView(key) },
+                        shape = CircleShape,
                         label = { Text(label) }
                     )
                 }
                 FilterChip(
                     selected = state.groupBySource,
                     onClick = { viewModel.setGroupBySource(!state.groupBySource) },
+                    shape = CircleShape,
                     leadingIcon = {
                         Icon(
                             Icons.Default.Layers,
@@ -266,7 +287,7 @@ fun LibraryScreen(
                 }
                 LazyVerticalGrid(
                     columns = GridCells.Adaptive(minSize = 140.dp),
-                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 104.dp),
+                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 112.dp),
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                     verticalArrangement = Arrangement.spacedBy(16.dp),
                     modifier = Modifier.fillMaxSize()
@@ -315,8 +336,8 @@ fun LibraryScreen(
                     else emptyMap()
                 }
                 LazyColumn(
-                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 104.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 112.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
                     modifier = Modifier.fillMaxSize()
                 ) {
                     if (state.groupBySource) {
@@ -421,33 +442,85 @@ fun LibraryScreen(
 
 @Composable
 private fun LibraryListRow(
-    card: com.example.ui.components.MangaCardUi,
+    card: MangaCardUi,
     selected: Boolean,
     onClick: () -> Unit,
     onToggleSelect: () -> Unit
 ) {
     Surface(
-        color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainer,
-        shape = MaterialTheme.shapes.medium,
+        color = if (selected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+        else MaterialTheme.colorScheme.surfaceContainer,
+        shape = RoundedCornerShape(18.dp),
+        border = BorderStroke(
+            0.75.dp,
+            if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
+            else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)
+        ),
         modifier = Modifier
             .fillMaxWidth()
+            .clip(RoundedCornerShape(18.dp))
             .clickable(onClick = onClick)
     ) {
-        ListItem(
-            headlineContent = { Text(card.title) },
-            supportingContent = { Text("${card.sourceName} • ${card.latestChapter}") },
-            trailingContent = {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    if (card.unreadCount > 0) {
-                        Badge { Text("${card.unreadCount}") }
-                    }
-                    Checkbox(
-                        checked = selected,
-                        onCheckedChange = { onToggleSelect() }
+        Row(
+            modifier = Modifier.padding(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            MangaCoverImage(
+                coverUrl = card.coverUrl,
+                contentDescription = "${card.title} cover",
+                modifier = Modifier
+                    .width(52.dp)
+                    .aspectRatio(3f / 4.2f)
+                    .clip(RoundedCornerShape(12.dp))
+            )
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(3.dp)
+            ) {
+                Text(
+                    card.title,
+                    style = MaterialTheme.typography.titleSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    "${card.sourceName}${if (card.latestChapter.isNotBlank()) " • ${card.latestChapter}" else ""}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                if (card.progressFraction != null && card.progressFraction > 0f) {
+                    LinearProgressIndicator(
+                        progress = { card.progressFraction.coerceIn(0f, 1f) },
+                        modifier = Modifier
+                            .fillMaxWidth(0.75f)
+                            .height(3.dp)
+                            .clip(RoundedCornerShape(2.dp)),
+                        color = MaterialTheme.colorScheme.primary
                     )
                 }
             }
-        )
+            if (card.unreadCount > 0) {
+                Surface(
+                    color = MaterialTheme.colorScheme.primary,
+                    shape = CircleShape
+                ) {
+                    Text(
+                        text = "${card.unreadCount}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                    )
+                }
+            }
+            Checkbox(
+                checked = selected,
+                onCheckedChange = { onToggleSelect() }
+            )
+        }
     }
 }
 
@@ -617,7 +690,6 @@ private fun CategoryManagerDialog(
                     ) { Text("Add") }
                 }
 
-                // Color & Icon pickers for new category
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically

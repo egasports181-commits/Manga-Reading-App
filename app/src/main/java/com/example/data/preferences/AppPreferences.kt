@@ -18,7 +18,7 @@ data class UserPreferences(
     val themeMode: ThemeMode = ThemeMode.DARK,
     val amoledBlack: Boolean = false,
     val dynamicColor: Boolean = false,
-    val accentPreset: AccentPreset = AccentPreset.CRIMSON_INK,
+    val accentPreset: AccentPreset = AccentPreset.WARM_ORANGE,
     val demoModeEnabled: Boolean = false,
 
     // Network & DNS
@@ -154,7 +154,7 @@ class AppPreferencesRepository(private val context: Context) {
             themeMode = ThemeMode.fromId(prefs[Keys.THEME_MODE] ?: "dark"),
             amoledBlack = prefs[Keys.AMOLED_BLACK] ?: false,
             dynamicColor = prefs[Keys.DYNAMIC_COLOR] ?: false,
-            accentPreset = AccentPreset.fromId(prefs[Keys.ACCENT_PRESET] ?: "crimson"),
+            accentPreset = AccentPreset.fromId(prefs[Keys.ACCENT_PRESET] ?: "warm_orange"),
             demoModeEnabled = prefs[Keys.DEMO_MODE] ?: false,
             dnsMode = DnsMode.fromId(prefs[Keys.DNS_MODE] ?: DnsMode.DOH_AUTO_FALLBACK.id),
             preferIpv4 = prefs[Keys.PREFER_IPV4] ?: true,

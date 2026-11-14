@@ -3,8 +3,11 @@ package com.example.ui.screens.sources
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -14,12 +17,16 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.ui.components.ErrorRetryBanner
+import com.example.ui.components.KomaCircularGlassButton
 import com.example.ui.components.KomaEmptyState
+import com.example.ui.components.LiquidGlassTopBar
+import com.example.ui.components.MangaCardSkeletonRow
 import com.example.ui.components.MangaCoverCard
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -42,46 +49,81 @@ fun SourceBrowseScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
-                },
-                title = {
-                    if (showSearchBar) {
+            if (showSearchBar) {
+                TopAppBar(
+                    navigationIcon = {
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        }
+                    },
+                    title = {
                         OutlinedTextField(
                             value = state.query,
                             onValueChange = viewModel::setBrowseQuery,
                             placeholder = { Text("Search ${state.sourceName}...") },
                             singleLine = true,
+                            shape = RoundedCornerShape(16.dp),
                             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                             keyboardActions = KeyboardActions(onSearch = { viewModel.setBrowseMode("search") }),
                             modifier = Modifier.fillMaxWidth()
                         )
-                    } else {
-                        Text(state.sourceName)
-                    }
-                },
-                actions = {
-                    IconButton(onClick = { showSearchBar = !showSearchBar }) {
-                        Icon(if (showSearchBar) Icons.Default.Close else Icons.Default.Search, contentDescription = "Search source")
-                    }
-                    IconButton(onClick = { showFilters = true }) {
-                        Icon(Icons.Default.FilterList, contentDescription = "Source filters")
-                    }
-                    if (state.supportsLogin) {
-                        IconButton(onClick = { showLoginDialog = true }) {
-                            Icon(Icons.Default.AccountCircle, contentDescription = "Source login")
+                    },
+                    actions = {
+                        IconButton(onClick = { showSearchBar = false }) {
+                            Icon(Icons.Default.Close, contentDescription = "Close search")
                         }
                     }
-                    if (state.preferences.isNotEmpty()) {
-                        IconButton(onClick = { showPrefsDialog = true }) {
-                            Icon(Icons.Default.Settings, contentDescription = "Source settings")
+                )
+            } else {
+                LiquidGlassTopBar(
+                    title = state.sourceName.ifBlank { "Browse Source" },
+                    subtitle = when (state.mode) {
+                        "latest" -> "Latest updates"
+                        "search" -> "Search results"
+                        else -> "Popular catalog"
+                    },
+                    navigationIcon = {
+                        Row {
+                            Spacer(Modifier.width(6.dp))
+                            KomaCircularGlassButton(
+                                icon = Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = "Back",
+                                onClick = onBack
+                            )
                         }
+                    },
+                    actions = {
+                        KomaCircularGlassButton(
+                            icon = Icons.Default.Search,
+                            contentDescription = "Search source",
+                            onClick = { showSearchBar = true }
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        KomaCircularGlassButton(
+                            icon = Icons.Default.FilterList,
+                            contentDescription = "Source filters",
+                            onClick = { showFilters = true }
+                        )
+                        if (state.supportsLogin) {
+                            Spacer(Modifier.width(4.dp))
+                            KomaCircularGlassButton(
+                                icon = Icons.Default.AccountCircle,
+                                contentDescription = "Source login",
+                                onClick = { showLoginDialog = true }
+                            )
+                        }
+                        if (state.preferences.isNotEmpty()) {
+                            Spacer(Modifier.width(4.dp))
+                            KomaCircularGlassButton(
+                                icon = Icons.Default.Settings,
+                                contentDescription = "Source settings",
+                                onClick = { showPrefsDialog = true }
+                            )
+                        }
+                        Spacer(Modifier.width(8.dp))
                     }
-                }
-            )
+                )
+            }
         }
     ) { padding ->
         Column(
@@ -92,18 +134,20 @@ fun SourceBrowseScreen(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 FilterChip(
                     selected = state.mode == "popular",
                     onClick = { viewModel.setBrowseMode("popular") },
+                    shape = CircleShape,
                     label = { Text("Popular") },
                     leadingIcon = { Icon(Icons.Default.Whatshot, contentDescription = null, modifier = Modifier.size(16.dp)) }
                 )
                 FilterChip(
                     selected = state.mode == "latest",
                     onClick = { viewModel.setBrowseMode("latest") },
+                    shape = CircleShape,
                     label = { Text("Latest") },
                     leadingIcon = { Icon(Icons.Default.NewReleases, contentDescription = null, modifier = Modifier.size(16.dp)) }
                 )
@@ -111,6 +155,7 @@ fun SourceBrowseScreen(
                     FilterChip(
                         selected = state.mode == "search",
                         onClick = { viewModel.setBrowseMode("search") },
+                        shape = CircleShape,
                         label = { Text("Search") }
                     )
                 }
@@ -118,6 +163,10 @@ fun SourceBrowseScreen(
 
             if (state.isLoading && state.items.isEmpty()) {
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                Spacer(Modifier.height(14.dp))
+                MangaCardSkeletonRow()
+                Spacer(Modifier.height(14.dp))
+                MangaCardSkeletonRow()
             }
 
             state.error?.let { err ->
@@ -132,7 +181,7 @@ fun SourceBrowseScreen(
                     title = "No Titles Found",
                     subtitle = "Try adjusting your search query or filters, or verify network access."
                 )
-            } else {
+            } else if (state.items.isNotEmpty()) {
                 LazyVerticalGrid(
                     columns = GridCells.Adaptive(minSize = 140.dp),
                     contentPadding = PaddingValues(16.dp),
@@ -148,16 +197,20 @@ fun SourceBrowseScreen(
                         )
                     }
                     if (state.hasNextPage) {
-                        item {
+                        item(span = { GridItemSpan(maxLineSpan) }) {
                             Box(
                                 modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Button(
                                     onClick = { viewModel.loadSourcePage(state.page + 1, append = true) },
-                                    enabled = !state.isLoading
+                                    enabled = !state.isLoading,
+                                    shape = CircleShape
                                 ) {
-                                    Text(if (state.isLoading) "Loading..." else "Load More")
+                                    Text(
+                                        if (state.isLoading) "Loading..." else "Load More",
+                                        fontWeight = FontWeight.SemiBold
+                                    )
                                 }
                             }
                         }

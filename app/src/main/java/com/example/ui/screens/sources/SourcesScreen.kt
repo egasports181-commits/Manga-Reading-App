@@ -8,6 +8,7 @@ import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
@@ -26,6 +27,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -39,6 +42,9 @@ import com.example.data.local.entity.ExtensionPackageEntity
 import com.example.data.local.entity.ExtensionRepoEntity
 import com.example.domain.model.*
 import com.example.extension.ExtensionCompatibilityResolver
+import com.example.ui.components.ChapterListSkeleton
+import com.example.ui.components.KomaCircularGlassButton
+import com.example.ui.components.KomaElevatedCard
 import com.example.ui.components.KomaEmptyState
 import com.example.ui.components.LiquidGlassSurface
 import com.example.ui.components.LiquidGlassTopBar
@@ -82,34 +88,56 @@ fun SourcesScreen(
 
     Scaffold(
         topBar = {
-            Column {
+            Column(modifier = Modifier.background(MaterialTheme.colorScheme.background)) {
                 LiquidGlassTopBar(
                     title = "Browse & Extensions",
                     subtitle = "${state.repos.count { it.isEnabled }} active repos • ${state.packages.size} indexed",
                     actions = {
-                        IconButton(onClick = onOpenDiagnostics) {
-                            Icon(Icons.Default.NetworkCheck, contentDescription = "Network & repo diagnostics")
-                        }
+                        KomaCircularGlassButton(
+                            icon = Icons.Default.NetworkCheck,
+                            contentDescription = "Network & repo diagnostics",
+                            onClick = onOpenDiagnostics
+                        )
+                        Spacer(Modifier.width(4.dp))
                         if (selectedTab == 0) {
-                            IconButton(onClick = { viewModel.checkSourceAvailability() }) {
-                                Icon(Icons.Default.Refresh, contentDescription = "Recheck source health")
-                            }
+                            KomaCircularGlassButton(
+                                icon = Icons.Default.Refresh,
+                                contentDescription = "Recheck source health",
+                                onClick = { viewModel.checkSourceAvailability() }
+                            )
+                            Spacer(Modifier.width(8.dp))
                         } else if (selectedTab == 2) {
-                            IconButton(
+                            KomaCircularGlassButton(
+                                icon = Icons.Default.AddCircleOutline,
+                                contentDescription = "Add repository",
                                 onClick = { showAddRepoDialog = true },
+                                tint = MaterialTheme.colorScheme.primary,
                                 modifier = Modifier.testTag("add_repo_button")
-                            ) {
-                                Icon(Icons.Default.AddCircleOutline, contentDescription = "Add repository")
-                            }
+                            )
+                            Spacer(Modifier.width(8.dp))
+                        } else {
+                            Spacer(Modifier.width(4.dp))
                         }
                     }
                 )
-                PrimaryTabRow(selectedTabIndex = selectedTab) {
+                PrimaryTabRow(
+                    selectedTabIndex = selectedTab,
+                    containerColor = MaterialTheme.colorScheme.background,
+                    contentColor = MaterialTheme.colorScheme.primary
+                ) {
                     tabs.forEachIndexed { index, title ->
                         Tab(
                             selected = selectedTab == index,
                             onClick = { selectedTab = index },
-                            text = { Text(title, maxLines = 1) },
+                            text = {
+                                Text(
+                                    title,
+                                    maxLines = 1,
+                                    fontWeight = if (selectedTab == index) FontWeight.Bold else FontWeight.Medium
+                                )
+                            },
+                            selectedContentColor = MaterialTheme.colorScheme.primary,
+                            unselectedContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.testTag("sources_tab_$index")
                         )
                     }
@@ -121,20 +149,43 @@ fun SourcesScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
+                .background(
+                    Brush.verticalGradient(
+                        listOf(
+                            MaterialTheme.colorScheme.background,
+                            MaterialTheme.colorScheme.surfaceContainerLowest
+                        )
+                    )
+                )
         ) {
             state.statusMessage?.let { msg ->
                 Surface(
                     color = MaterialTheme.colorScheme.primaryContainer,
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
-                    shape = MaterialTheme.shapes.small
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 6.dp),
+                    shape = RoundedCornerShape(16.dp),
+                    border = BorderStroke(0.75.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f))
                 ) {
                     Row(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Text(msg, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
-                        IconButton(onClick = viewModel::clearBannerMessages, modifier = Modifier.size(24.dp)) {
+                        Icon(
+                            Icons.Default.CheckCircleOutline,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(Modifier.width(10.dp))
+                        Text(
+                            msg,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            modifier = Modifier.weight(1f)
+                        )
+                        IconButton(onClick = viewModel::clearBannerMessages, modifier = Modifier.size(28.dp)) {
                             Icon(Icons.Default.Close, contentDescription = "Dismiss", modifier = Modifier.size(16.dp))
                         }
                     }
@@ -142,17 +193,32 @@ fun SourcesScreen(
             }
             state.errorMessage?.let { err ->
                 Surface(
-                    color = MaterialTheme.colorScheme.error.copy(alpha = 0.16f),
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
-                    shape = MaterialTheme.shapes.small
+                    color = MaterialTheme.colorScheme.error.copy(alpha = 0.14f),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 6.dp),
+                    shape = RoundedCornerShape(16.dp),
+                    border = BorderStroke(0.75.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.45f))
                 ) {
                     Row(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Text(err, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error, modifier = Modifier.weight(1f))
-                        IconButton(onClick = viewModel::clearBannerMessages, modifier = Modifier.size(24.dp)) {
+                        Icon(
+                            Icons.Default.ErrorOutline,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(Modifier.width(10.dp))
+                        Text(
+                            err,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.weight(1f)
+                        )
+                        IconButton(onClick = viewModel::clearBannerMessages, modifier = Modifier.size(28.dp)) {
                             Icon(Icons.Default.Close, contentDescription = "Dismiss", modifier = Modifier.size(16.dp))
                         }
                     }
@@ -282,7 +348,7 @@ private fun SourcesDirectoryTab(
     onOpenExtensionsTab: () -> Unit
 ) {
     LazyColumn(
-        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 104.dp),
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 112.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         item {
@@ -294,37 +360,64 @@ private fun SourcesDirectoryTab(
                     FilterChip(
                         selected = state.selectedLangFilter == code,
                         onClick = { onLangFilter(code) },
-                        label = { Text(label) }
+                        label = { Text(label) },
+                        shape = CircleShape
                     )
                 }
             }
         }
 
         item {
-            Surface(
-                color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                shape = MaterialTheme.shapes.medium,
-                modifier = Modifier.fillMaxWidth()
+            KomaElevatedCard(
+                shape = RoundedCornerShape(20.dp),
+                containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
             ) {
                 Row(
-                    modifier = Modifier.padding(14.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text("Local Manga / CBZ Folder (SAF)", style = MaterialTheme.typography.titleSmall)
-                        Text(
-                            text = if (state.safLocalFolderUri.isBlank()) {
-                                "Select a device folder containing .cbz archives or chapter image folders"
-                            } else {
-                                "Linked: ${state.safLocalFolderUri.takeLast(36)}"
-                            },
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
+                            shape = CircleShape,
+                            modifier = Modifier.size(42.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    Icons.Default.FolderZip,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+                        Column {
+                            Text("Local Manga / CBZ Folder", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                            Text(
+                                text = if (state.safLocalFolderUri.isBlank()) {
+                                    "Link a device folder with .cbz archives or chapter images"
+                                } else {
+                                    "Linked: ${state.safLocalFolderUri.takeLast(34)}"
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
-                    OutlinedButton(onClick = onPickLocalSaf) {
-                        Icon(Icons.Default.FolderOpen, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(10.dp))
+                    FilledTonalButton(
+                        onClick = onPickLocalSaf,
+                        shape = CircleShape,
+                        modifier = Modifier.minimumInteractiveComponentSize()
+                    ) {
+                        Icon(Icons.Default.FolderOpen, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(6.dp))
                         Text("Select")
                     }
@@ -334,90 +427,97 @@ private fun SourcesDirectoryTab(
 
         items(state.sources, key = { it.id }) { source ->
             val health = source.healthStatus
-            Surface(
+            KomaElevatedCard(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable(enabled = source.isEnabled) { onOpenSource(source.id) }
                     .testTag("source_item_${source.id}"),
-                color = MaterialTheme.colorScheme.surfaceContainer,
-                shape = MaterialTheme.shapes.medium,
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.35f))
+                shape = RoundedCornerShape(20.dp),
+                onClick = if (source.isEnabled) ({ onOpenSource(source.id) }) else null
             ) {
-                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.size(46.dp)
                     ) {
-                        Surface(
-                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.16f),
-                            shape = RoundedCornerShape(10.dp),
-                            modifier = Modifier.size(44.dp)
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    imageVector = when {
-                                        source.id == "local_saf" -> Icons.Default.FolderZip
-                                        source.isDemo -> Icons.Default.Science
-                                        else -> Icons.Default.Public
-                                    },
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary
-                                )
-                            }
-                        }
-
-                        Column(modifier = Modifier.weight(1f)) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                Text(source.name, style = MaterialTheme.typography.titleMedium)
-                                if (source.isDemo) {
-                                    Surface(
-                                        color = MaterialTheme.colorScheme.secondary.copy(alpha = 0.2f),
-                                        shape = RoundedCornerShape(4.dp)
-                                    ) {
-                                        Text(
-                                            "SAMPLE",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.secondary,
-                                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
-                                        )
-                                    }
-                                }
-                            }
-                            Text(
-                                text = "${source.category} • ${source.language.uppercase()}",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = when {
+                                    source.id == "local_saf" -> Icons.Default.FolderZip
+                                    source.isDemo -> Icons.Default.Science
+                                    else -> Icons.Default.Public
+                                },
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary
                             )
-                            if (source.isEnabled && health != null) {
-                                val statusColor = if (health.isOnline) StatusOngoing else StatusError
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                        }
+                    }
+
+                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(
+                                source.name,
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            if (source.isDemo) {
+                                Surface(
+                                    color = MaterialTheme.colorScheme.secondary.copy(alpha = 0.18f),
+                                    shape = CircleShape
                                 ) {
-                                    Surface(modifier = Modifier.size(7.dp), shape = CircleShape, color = statusColor) {}
                                     Text(
-                                        text = if (health.isOnline) {
-                                            "Online • ${health.latencyMs}ms"
-                                        } else {
-                                            "Offline • ${health.errorReason ?: "Unreachable"}"
-                                        },
+                                        "SAMPLE",
                                         style = MaterialTheme.typography.labelSmall,
-                                        color = statusColor,
-                                        maxLines = 2,
-                                        overflow = TextOverflow.Ellipsis
+                                        color = MaterialTheme.colorScheme.secondary,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
                                     )
                                 }
                             }
                         }
-
-                        Switch(
-                            checked = source.isEnabled,
-                            onCheckedChange = { onToggleSourceEnabled(source.id, it) }
+                        Text(
+                            text = "${source.category} • ${source.language.uppercase()}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
+                        if (source.isEnabled && health != null) {
+                            val statusColor = if (health.isOnline) StatusOngoing else StatusError
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                                modifier = Modifier.padding(top = 2.dp)
+                            ) {
+                                Surface(modifier = Modifier.size(7.dp), shape = CircleShape, color = statusColor) {}
+                                Text(
+                                    text = if (health.isOnline) {
+                                        "Online • ${health.latencyMs}ms"
+                                    } else {
+                                        "Offline • ${health.errorReason ?: "Unreachable"}"
+                                    },
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = statusColor,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
                     }
+
+                    Switch(
+                        checked = source.isEnabled,
+                        onCheckedChange = { onToggleSourceEnabled(source.id, it) }
+                    )
                 }
             }
         }
@@ -425,13 +525,16 @@ private fun SourcesDirectoryTab(
         if (state.verifiedExtensionDescriptors.isNotEmpty()) {
             item {
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 6.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
                         "Verified Mihon Extension Catalogs (${state.verifiedExtensionDescriptors.size})",
-                        style = MaterialTheme.typography.titleSmall
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold
                     )
                     TextButton(onClick = onOpenExtensionsTab) {
                         Text("Manage")
@@ -439,26 +542,29 @@ private fun SourcesDirectoryTab(
                 }
             }
             items(state.verifiedExtensionDescriptors, key = { "desc_${it.pkg.pkgId}" }) { desc ->
-                Surface(
-                    color = MaterialTheme.colorScheme.surfaceContainer,
-                    shape = MaterialTheme.shapes.medium
-                ) {
-                    Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                KomaElevatedCard(shape = RoundedCornerShape(18.dp)) {
+                    Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(desc.pkg.name, style = MaterialTheme.typography.titleSmall)
+                            Text(
+                                desc.pkg.name,
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.weight(1f)
+                            )
                             Surface(
                                 color = StatusHiatus.copy(alpha = 0.16f),
-                                shape = RoundedCornerShape(6.dp)
+                                shape = CircleShape
                             ) {
                                 Text(
                                     text = if (desc.canExecuteInKoma) "Executable" else "APK Verified • Restricted",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = StatusHiatus,
-                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                    fontWeight = FontWeight.Medium,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
                                 )
                             }
                         }
@@ -495,7 +601,7 @@ private fun GlobalSearchTab(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp, vertical = 10.dp),
-            shape = RoundedCornerShape(20.dp),
+            shape = RoundedCornerShape(22.dp),
             shadowElevation = 6.dp
         ) {
             Row(
@@ -508,6 +614,7 @@ private fun GlobalSearchTab(
                     onValueChange = onQueryChange,
                     placeholder = { Text("Search title or author across sources") },
                     singleLine = true,
+                    shape = RoundedCornerShape(16.dp),
                     leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
                     trailingIcon = {
                         if (state.globalQuery.isNotBlank()) {
@@ -530,14 +637,16 @@ private fun GlobalSearchTab(
                 }
                 Button(
                     onClick = onSearch,
-                    modifier = Modifier.minimumInteractiveComponentSize().testTag("global_search_submit")
+                    shape = CircleShape,
+                    modifier = Modifier
+                        .minimumInteractiveComponentSize()
+                        .testTag("global_search_submit")
                 ) {
                     Text("Go")
                 }
             }
         }
 
-        // Per-source inclusion toggles
         if (state.sources.isNotEmpty()) {
             Row(
                 modifier = Modifier
@@ -552,6 +661,7 @@ private fun GlobalSearchTab(
                         selected = included,
                         onClick = { onToggleSearchSource(src.id) },
                         label = { Text(src.name) },
+                        shape = CircleShape,
                         leadingIcon = if (included) {
                             { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
                         } else null
@@ -560,7 +670,6 @@ private fun GlobalSearchTab(
             }
         }
 
-        // Live query suggestions
         if (state.searchSuggestions.isNotEmpty() && state.globalQuery.isNotBlank()) {
             Row(
                 modifier = Modifier
@@ -572,18 +681,24 @@ private fun GlobalSearchTab(
                 state.searchSuggestions.forEach { sug ->
                     SuggestionChip(
                         onClick = { onSelectHistory(sug) },
-                        label = { Text(sug) }
+                        label = { Text(sug) },
+                        shape = CircleShape
                     )
                 }
             }
         }
 
         if (state.isSearchingGlobal) {
-            LinearProgressIndicator(modifier = Modifier.fillMaxWidth().padding(top = 4.dp))
+            LinearProgressIndicator(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 4.dp)
+                    .clip(CircleShape)
+            )
         }
 
         LazyColumn(
-            contentPadding = PaddingValues(top = 8.dp, bottom = 104.dp),
+            contentPadding = PaddingValues(top = 8.dp, bottom = 112.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             if (state.globalSourceErrors.isNotEmpty()) {
@@ -595,13 +710,16 @@ private fun GlobalSearchTab(
                         state.globalSourceErrors.forEach { (src, err) ->
                             Surface(
                                 color = MaterialTheme.colorScheme.error.copy(alpha = 0.12f),
-                                shape = RoundedCornerShape(10.dp)
+                                shape = RoundedCornerShape(14.dp),
+                                border = BorderStroke(0.75.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.35f))
                             ) {
                                 Text(
                                     "$src: $err",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = StatusError,
-                                    modifier = Modifier.fillMaxWidth().padding(10.dp)
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(12.dp)
                                 )
                             }
                         }
@@ -613,13 +731,15 @@ private fun GlobalSearchTab(
                 item {
                     Surface(
                         color = MaterialTheme.colorScheme.secondaryContainer,
-                        shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp)
                     ) {
                         Text(
                             text = "Duplicate series detected across multiple sources (${state.duplicateTitlesAcrossSources.size} title(s)) — check source badges on cards.",
                             style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.padding(10.dp)
+                            modifier = Modifier.padding(12.dp)
                         )
                     }
                 }
@@ -631,34 +751,48 @@ private fun GlobalSearchTab(
                         Text(
                             text = "Recent & Saved Searches",
                             style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
                             modifier = Modifier.padding(horizontal = 16.dp)
                         )
                     }
                     items(state.searchHistory, key = { it.id }) { entry ->
-                        ListItem(
-                            headlineContent = { Text(entry.query) },
-                            leadingContent = {
+                        KomaElevatedCard(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp),
+                            shape = RoundedCornerShape(16.dp),
+                            onClick = { onSelectHistory(entry.query) }
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
                                 Icon(
                                     if (entry.isSaved) Icons.Default.Bookmark else Icons.Default.History,
                                     contentDescription = null,
-                                    tint = if (entry.isSaved) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurfaceVariant
+                                    tint = if (entry.isSaved) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(20.dp)
                                 )
-                            },
-                            trailingContent = {
-                                Row {
-                                    IconButton(onClick = { onToggleSaveSearch(entry) }) {
-                                        Icon(
-                                            if (entry.isSaved) Icons.Default.Star else Icons.Default.StarBorder,
-                                            contentDescription = "Save search"
-                                        )
-                                    }
-                                    IconButton(onClick = { onDeleteSearch(entry.id) }) {
-                                        Icon(Icons.Default.DeleteOutline, contentDescription = "Remove")
-                                    }
+                                Spacer(Modifier.width(12.dp))
+                                Text(
+                                    entry.query,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                IconButton(onClick = { onToggleSaveSearch(entry) }) {
+                                    Icon(
+                                        if (entry.isSaved) Icons.Default.Star else Icons.Default.StarBorder,
+                                        contentDescription = "Save search",
+                                        tint = if (entry.isSaved) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
                                 }
-                            },
-                            modifier = Modifier.clickable { onSelectHistory(entry.query) }
-                        )
+                                IconButton(onClick = { onDeleteSearch(entry.id) }) {
+                                    Icon(Icons.Default.DeleteOutline, contentDescription = "Remove")
+                                }
+                            }
+                        }
                     }
                 } else {
                     item {
@@ -676,6 +810,7 @@ private fun GlobalSearchTab(
                         Text(
                             text = "$sourceName (${cards.size})",
                             style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
                             modifier = Modifier.padding(horizontal = 16.dp)
                         )
                         LazyRow(
@@ -723,7 +858,7 @@ private fun ExtensionsManagerTab(
     val failedRepoCount = state.repos.count { it.isEnabled && !it.lastError.isNullOrBlank() }
 
     LazyColumn(
-        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 104.dp),
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 112.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         item {
@@ -742,25 +877,36 @@ private fun ExtensionsManagerTab(
                     FilterChip(
                         selected = state.extSubTab == subTab,
                         onClick = { onSelectSubTab(subTab) },
-                        label = { Text(label) }
+                        label = { Text(label) },
+                        shape = CircleShape
                     )
                 }
             }
         }
 
         if (state.isRefreshingRepos) {
-            item { LinearProgressIndicator(modifier = Modifier.fillMaxWidth()) }
+            item {
+                LinearProgressIndicator(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(CircleShape)
+                )
+            }
         }
 
         if (state.extSubTab == ExtensionStoreTab.REPOSITORIES) {
             item {
-                Surface(
-                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                    shape = MaterialTheme.shapes.medium,
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f))
+                KomaElevatedCard(
+                    shape = RoundedCornerShape(20.dp),
+                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    borderColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)
                 ) {
-                    Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("Mihon & Koma Extension Repositories", style = MaterialTheme.typography.titleSmall)
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text(
+                            "Mihon & Koma Extension Repositories",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold
+                        )
                         Text(
                             "Supports HTTPS Mihon `index.pb` (Protobuf), `index.min.json`, companion `repo.json`, and Koma declarative JSON adapters. Built-in defaults stay seeded and independently syncable.",
                             style = MaterialTheme.typography.bodySmall,
@@ -770,21 +916,21 @@ private fun ExtensionsManagerTab(
                             modifier = Modifier.horizontalScroll(rememberScrollState()),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Button(onClick = onRefreshAllRepos) {
+                            Button(onClick = onRefreshAllRepos, shape = CircleShape) {
                                 Icon(Icons.Default.Sync, contentDescription = null, modifier = Modifier.size(16.dp))
                                 Spacer(Modifier.width(6.dp))
                                 Text("Refresh All")
                             }
                             if (failedRepoCount > 0) {
-                                FilledTonalButton(onClick = onRetryFailedRepos) {
+                                FilledTonalButton(onClick = onRetryFailedRepos, shape = CircleShape) {
                                     Text("Retry Failed ($failedRepoCount)")
                                 }
                             }
-                            OutlinedButton(onClick = onAddRepo) { Text("Add URL") }
-                            OutlinedButton(onClick = onRestoreBuiltIns) { Text("Restore Defaults") }
-                            OutlinedButton(onClick = onExportRepos) { Text("Export JSON") }
-                            OutlinedButton(onClick = onImportRepos) { Text("Import JSON") }
-                            OutlinedButton(onClick = onOpenDiagnostics) { Text("Diagnostics") }
+                            OutlinedButton(onClick = onAddRepo, shape = CircleShape) { Text("Add URL") }
+                            OutlinedButton(onClick = onRestoreBuiltIns, shape = CircleShape) { Text("Restore Defaults") }
+                            OutlinedButton(onClick = onExportRepos, shape = CircleShape) { Text("Export JSON") }
+                            OutlinedButton(onClick = onImportRepos, shape = CircleShape) { Text("Import JSON") }
+                            OutlinedButton(onClick = onOpenDiagnostics, shape = CircleShape) { Text("Diagnostics") }
                         }
                     }
                 }
@@ -792,12 +938,11 @@ private fun ExtensionsManagerTab(
 
             items(state.repos, key = { "repo_${it.id}" }) { repo ->
                 val hasErr = !repo.lastError.isNullOrBlank()
-                Surface(
-                    color = MaterialTheme.colorScheme.surfaceContainer,
-                    shape = MaterialTheme.shapes.medium,
-                    border = if (hasErr) BorderStroke(1.dp, StatusError.copy(alpha = 0.35f)) else null
+                KomaElevatedCard(
+                    shape = RoundedCornerShape(20.dp),
+                    borderColor = if (hasErr) StatusError.copy(alpha = 0.45f) else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
                 ) {
-                    Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -811,30 +956,31 @@ private fun ExtensionsManagerTab(
                                     Text(
                                         repo.displayName.ifBlank { repo.name },
                                         style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.SemiBold,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis
                                     )
                                     Surface(
                                         color = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
-                                        shape = RoundedCornerShape(4.dp)
+                                        shape = CircleShape
                                     ) {
                                         Text(
                                             repo.repoFormat,
                                             style = MaterialTheme.typography.labelSmall,
                                             color = MaterialTheme.colorScheme.primary,
-                                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
                                         )
                                     }
                                     if (repo.isBuiltIn) {
                                         Surface(
-                                            color = MaterialTheme.colorScheme.secondary.copy(alpha = 0.14f),
-                                            shape = RoundedCornerShape(4.dp)
+                                            color = MaterialTheme.colorScheme.secondary.copy(alpha = 0.16f),
+                                            shape = CircleShape
                                         ) {
                                             Text(
                                                 "DEFAULT",
                                                 style = MaterialTheme.typography.labelSmall,
                                                 color = MaterialTheme.colorScheme.secondary,
-                                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
                                             )
                                         }
                                     }
@@ -865,11 +1011,12 @@ private fun ExtensionsManagerTab(
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
-                            Row(verticalAlignment = Alignment.CenterVertically) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                                 FilterChip(
                                     selected = repo.isTrusted,
                                     onClick = { onTrustRepo(repo, !repo.isTrusted) },
-                                    label = { Text(if (repo.isTrusted) "Trusted" else "Untrusted") }
+                                    label = { Text(if (repo.isTrusted) "Trusted" else "Untrusted") },
+                                    shape = CircleShape
                                 )
                                 IconButton(onClick = { onRefreshRepo(repo) }) {
                                     Icon(Icons.Default.Refresh, contentDescription = "Refresh repo")
@@ -881,7 +1028,17 @@ private fun ExtensionsManagerTab(
                         }
 
                         repo.lastError?.let { err ->
-                            Text(err, style = MaterialTheme.typography.bodySmall, color = StatusError)
+                            Surface(
+                                color = StatusError.copy(alpha = 0.1f),
+                                shape = RoundedCornerShape(10.dp)
+                            ) {
+                                Text(
+                                    err,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = StatusError,
+                                    modifier = Modifier.fillMaxWidth().padding(8.dp)
+                                )
+                            }
                         }
                     }
                 }
@@ -892,29 +1049,37 @@ private fun ExtensionsManagerTab(
                     Text(
                         "Recent APK / Adapter Audit Log",
                         style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
                         modifier = Modifier.padding(top = 6.dp)
                     )
                 }
                 items(state.installHistory.take(15), key = { "hist_${it.id}" }) { entry ->
-                    Surface(
-                        color = MaterialTheme.colorScheme.surfaceContainer,
-                        shape = RoundedCornerShape(10.dp)
-                    ) {
-                        Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    KomaElevatedCard(shape = RoundedCornerShape(16.dp)) {
+                        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text("${entry.extensionName} (${entry.action})", style = MaterialTheme.typography.labelMedium)
                                 Text(
-                                    entry.status,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = when (entry.status) {
-                                        "SUCCESS", "ACTIVE" -> StatusOngoing
-                                        "VERIFIED", "VERIFIED_UNSUPPORTED_RUNTIME" -> StatusCompleted
-                                        else -> StatusHiatus
-                                    }
+                                    "${entry.extensionName} (${entry.action})",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    modifier = Modifier.weight(1f)
                                 )
+                                val logColor = when (entry.status) {
+                                    "SUCCESS", "ACTIVE" -> StatusOngoing
+                                    "VERIFIED", "VERIFIED_UNSUPPORTED_RUNTIME" -> StatusCompleted
+                                    else -> StatusHiatus
+                                }
+                                Surface(color = logColor.copy(alpha = 0.14f), shape = CircleShape) {
+                                    Text(
+                                        entry.status,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = logColor,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                    )
+                                }
                             }
                             Text(
                                 entry.detail,
@@ -939,16 +1104,25 @@ private fun ExtensionsManagerTab(
                         onValueChange = onSearchChange,
                         placeholder = { Text("Search extensions, pkg ID, or source") },
                         singleLine = true,
+                        shape = RoundedCornerShape(18.dp),
                         leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
                         modifier = Modifier.weight(1f)
                     )
-                    FilledTonalButton(onClick = onRefreshAllRepos) {
+                    FilledTonalButton(
+                        onClick = onRefreshAllRepos,
+                        shape = CircleShape,
+                        modifier = Modifier.minimumInteractiveComponentSize()
+                    ) {
                         Icon(Icons.Default.Sync, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(4.dp))
                         Text("Sync")
                     }
                     if (updatesCount > 0) {
-                        Button(onClick = onUpdateAll) {
+                        Button(
+                            onClick = onUpdateAll,
+                            shape = CircleShape,
+                            modifier = Modifier.minimumInteractiveComponentSize()
+                        ) {
                             Text("Update ($updatesCount)")
                         }
                     }
@@ -964,7 +1138,8 @@ private fun ExtensionsManagerTab(
                         FilterChip(
                             selected = state.extCompatFilter == cf,
                             onClick = { onCompatFilterChange(cf) },
-                            label = { Text(cf.label) }
+                            label = { Text(cf.label) },
+                            shape = CircleShape
                         )
                     }
                 }
@@ -979,13 +1154,15 @@ private fun ExtensionsManagerTab(
                         FilterChip(
                             selected = state.extLangFilter == "all",
                             onClick = { onLangFilterChange("all") },
-                            label = { Text("All Langs") }
+                            label = { Text("All Langs") },
+                            shape = CircleShape
                         )
                         state.allPackageLanguages.take(12).forEach { lang ->
                             FilterChip(
                                 selected = state.extLangFilter.equals(lang, true),
                                 onClick = { onLangFilterChange(lang) },
-                                label = { Text(lang.uppercase()) }
+                                label = { Text(lang.uppercase()) },
+                                shape = CircleShape
                             )
                         }
                     }
@@ -1001,13 +1178,15 @@ private fun ExtensionsManagerTab(
                         FilterChip(
                             selected = state.extRepoFilterId == null,
                             onClick = { onRepoFilterChange(null) },
-                            label = { Text("All Repos") }
+                            label = { Text("All Repos") },
+                            shape = CircleShape
                         )
                         state.repos.filter { it.isEnabled }.forEach { repo ->
                             FilterChip(
                                 selected = state.extRepoFilterId == repo.id,
                                 onClick = { onRepoFilterChange(repo.id) },
-                                label = { Text(repo.displayName.ifBlank { repo.name }) }
+                                label = { Text(repo.displayName.ifBlank { repo.name }) },
+                                shape = CircleShape
                             )
                         }
                     }
@@ -1023,17 +1202,20 @@ private fun ExtensionsManagerTab(
                         FilterChip(
                             selected = state.extSort == sort,
                             onClick = { onSortChange(sort) },
-                            label = { Text("Sort: ${sort.label}") }
+                            label = { Text("Sort: ${sort.label}") },
+                            shape = CircleShape
                         )
                     }
                 }
             }
 
-            if (state.packages.isEmpty()) {
+            if (state.isRefreshingRepos && state.packages.isEmpty()) {
+                item { ChapterListSkeleton(count = 5) }
+            } else if (state.packages.isEmpty()) {
                 item {
                     KomaEmptyState(
                         title = "No Extension Packages Shown",
-                        subtitle = "Tap Sync above to fetch extension catalogs from your 8 configured Mihon repositories, or adjust filters.",
+                        subtitle = "Tap Sync above to fetch extension catalogs from your configured Mihon repositories, or adjust filters.",
                         actionLabel = "Sync Repositories",
                         onAction = onRefreshAllRepos,
                         showIllustration = false
@@ -1046,10 +1228,10 @@ private fun ExtensionsManagerTab(
                     val downloadFraction = state.extDownloadProgress[pkg.pkgId]
                     val lifecycle = ExtensionCompatibilityResolver.resolveLifecycle(pkg)
 
-                    Surface(
-                        color = MaterialTheme.colorScheme.surfaceContainer,
-                        shape = MaterialTheme.shapes.medium,
-                        modifier = Modifier.fillMaxWidth().clickable { onInspect(pkg) }
+                    KomaElevatedCard(
+                        shape = RoundedCornerShape(20.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = { onInspect(pkg) }
                     ) {
                         Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             Row(
@@ -1059,15 +1241,17 @@ private fun ExtensionsManagerTab(
                             ) {
                                 Surface(
                                     color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                                    shape = RoundedCornerShape(10.dp),
-                                    modifier = Modifier.size(40.dp)
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier.size(44.dp)
                                 ) {
                                     if (pkg.iconUrl.isNotBlank()) {
                                         AsyncImage(
                                             model = pkg.iconUrl,
                                             contentDescription = pkg.name,
                                             contentScale = ContentScale.Crop,
-                                            modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(10.dp))
+                                            modifier = Modifier
+                                                .fillMaxSize()
+                                                .clip(RoundedCornerShape(12.dp))
                                         )
                                     } else {
                                         Box(contentAlignment = Alignment.Center) {
@@ -1084,6 +1268,7 @@ private fun ExtensionsManagerTab(
                                     Text(
                                         pkg.name,
                                         style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.SemiBold,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis
                                     )
@@ -1105,7 +1290,7 @@ private fun ExtensionsManagerTab(
                                 }
                                 Surface(
                                     color = badgeColor.copy(alpha = 0.14f),
-                                    shape = RoundedCornerShape(6.dp)
+                                    shape = CircleShape
                                 ) {
                                     Text(
                                         text = when (lifecycle.primaryState) {
@@ -1117,7 +1302,8 @@ private fun ExtensionsManagerTab(
                                         },
                                         style = MaterialTheme.typography.labelSmall,
                                         color = badgeColor,
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                        fontWeight = FontWeight.Medium,
+                                        modifier = Modifier.padding(horizontal = 9.dp, vertical = 3.dp)
                                     )
                                 }
                             }
@@ -1137,7 +1323,9 @@ private fun ExtensionsManagerTab(
                             if (downloadFraction != null) {
                                 LinearProgressIndicator(
                                     progress = { downloadFraction },
-                                    modifier = Modifier.fillMaxWidth()
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(CircleShape)
                                 )
                             }
 
@@ -1152,13 +1340,16 @@ private fun ExtensionsManagerTab(
                                             checked = pkg.isEnabled,
                                             onCheckedChange = { onToggleEnabled(pkg.pkgId, it) }
                                         )
-                                        Text(if (pkg.isEnabled) "Active" else "Installed (Paused)", style = MaterialTheme.typography.labelMedium)
+                                        Text(
+                                            if (pkg.isEnabled) "Active" else "Installed (Paused)",
+                                            style = MaterialTheme.typography.labelMedium
+                                        )
                                     }
                                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                         if (pkg.hasUpdate) {
-                                            Button(onClick = { onInstallOrUpdate(pkg) }) { Text("Update") }
+                                            Button(onClick = { onInstallOrUpdate(pkg) }, shape = CircleShape) { Text("Update") }
                                         }
-                                        OutlinedButton(onClick = { onUninstall(pkg.pkgId) }) { Text("Uninstall") }
+                                        OutlinedButton(onClick = { onUninstall(pkg.pkgId) }, shape = CircleShape) { Text("Uninstall") }
                                     }
                                 } else {
                                     Text(
@@ -1172,17 +1363,18 @@ private fun ExtensionsManagerTab(
                                     Spacer(Modifier.width(8.dp))
                                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                         if (isApkVerified) {
-                                            OutlinedButton(onClick = { onUninstall(pkg.pkgId) }) {
+                                            OutlinedButton(onClick = { onUninstall(pkg.pkgId) }, shape = CircleShape) {
                                                 Text("Remove APK")
                                             }
                                         } else if (isKoma && lifecycle.isCompatible) {
-                                            Button(onClick = { onInstallOrUpdate(pkg) }) {
+                                            Button(onClick = { onInstallOrUpdate(pkg) }, shape = CircleShape) {
                                                 Text("Install")
                                             }
                                         } else if (!isKoma) {
                                             FilledTonalButton(
                                                 onClick = { onInstallOrUpdate(pkg) },
-                                                enabled = pkg.apkUrl.startsWith("https://") && downloadFraction == null
+                                                enabled = pkg.apkUrl.startsWith("https://") && downloadFraction == null,
+                                                shape = CircleShape
                                             ) {
                                                 Text("Verify APK")
                                             }
@@ -1209,6 +1401,7 @@ private fun AddRepositoryDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
+        shape = RoundedCornerShape(24.dp),
         title = { Text("Add Extension Repository") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -1222,13 +1415,17 @@ private fun AddRepositoryDialog(
                     onValueChange = { url = it },
                     label = { Text("Repository Index URL (https://...)") },
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth().testTag("repo_url_input")
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("repo_url_input")
                 )
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
                     label = { Text("Display Name (optional)") },
                     singleLine = true,
+                    shape = RoundedCornerShape(14.dp),
                     modifier = Modifier.fillMaxWidth()
                 )
                 OutlinedTextField(
@@ -1236,6 +1433,7 @@ private fun AddRepositoryDialog(
                     onValueChange = { fingerprint = it },
                     label = { Text("Expected SHA-256 Fingerprint (optional)") },
                     singleLine = true,
+                    shape = RoundedCornerShape(14.dp),
                     modifier = Modifier.fillMaxWidth()
                 )
             }
@@ -1243,7 +1441,8 @@ private fun AddRepositoryDialog(
         confirmButton = {
             Button(
                 onClick = { onAdd(url, name, fingerprint) },
-                enabled = url.isNotBlank()
+                enabled = url.isNotBlank(),
+                shape = CircleShape
             ) {
                 Text("Fetch & Add")
             }
@@ -1262,6 +1461,7 @@ private fun ImportRepositoryDialog(
     var raw by remember { mutableStateOf("") }
     AlertDialog(
         onDismissRequest = onDismiss,
+        shape = RoundedCornerShape(24.dp),
         title = { Text("Import Repository JSON") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1271,12 +1471,13 @@ private fun ImportRepositoryDialog(
                     onValueChange = { raw = it },
                     minLines = 5,
                     maxLines = 9,
+                    shape = RoundedCornerShape(14.dp),
                     modifier = Modifier.fillMaxWidth()
                 )
             }
         },
         confirmButton = {
-            Button(onClick = { onImport(raw) }, enabled = raw.isNotBlank()) { Text("Import") }
+            Button(onClick = { onImport(raw) }, enabled = raw.isNotBlank(), shape = CircleShape) { Text("Import") }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text("Cancel") }
@@ -1292,6 +1493,7 @@ private fun ExportRepositoryDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
+        shape = RoundedCornerShape(24.dp),
         title = { Text("Exported Repositories JSON") },
         text = {
             OutlinedTextField(
@@ -1300,11 +1502,12 @@ private fun ExportRepositoryDialog(
                 readOnly = true,
                 minLines = 6,
                 maxLines = 10,
+                shape = RoundedCornerShape(14.dp),
                 modifier = Modifier.fillMaxWidth()
             )
         },
         confirmButton = {
-            Button(onClick = onCopy) { Text("Copy & Close") }
+            Button(onClick = onCopy, shape = CircleShape) { Text("Copy & Close") }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text("Close") }
@@ -1323,6 +1526,7 @@ private fun ExtensionInspectDialog(
     val lifecycle = ExtensionCompatibilityResolver.resolveLifecycle(pkg)
     AlertDialog(
         onDismissRequest = onDismiss,
+        shape = RoundedCornerShape(24.dp),
         title = { Text(pkg.name) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -1362,9 +1566,9 @@ private fun ExtensionInspectDialog(
         },
         confirmButton = {
             if (isKoma && lifecycle.isCompatible && !pkg.isInstalled) {
-                Button(onClick = onInstallOrVerify) { Text("Install") }
+                Button(onClick = onInstallOrVerify, shape = CircleShape) { Text("Install") }
             } else if (!isKoma && pkg.apkUrl.startsWith("https://")) {
-                FilledTonalButton(onClick = onInstallOrVerify) { Text("Download & Verify SHA-256") }
+                FilledTonalButton(onClick = onInstallOrVerify, shape = CircleShape) { Text("Download & Verify SHA-256") }
             }
         },
         dismissButton = {
@@ -1409,7 +1613,8 @@ fun SearchFilterBottomSheet(
                     FilterChip(
                         selected = sortBy == opt,
                         onClick = { sortBy = opt },
-                        label = { Text(opt.label) }
+                        label = { Text(opt.label) },
+                        shape = CircleShape
                     )
                 }
             }
@@ -1419,12 +1624,13 @@ fun SearchFilterBottomSheet(
                 modifier = Modifier.horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                FilterChip(selected = selectedStatus == null, onClick = { selectedStatus = null }, label = { Text("Any") })
+                FilterChip(selected = selectedStatus == null, onClick = { selectedStatus = null }, label = { Text("Any") }, shape = CircleShape)
                 listOf(MangaStatus.ONGOING, MangaStatus.COMPLETED, MangaStatus.HIATUS).forEach { st ->
                     FilterChip(
                         selected = selectedStatus == st,
                         onClick = { selectedStatus = st },
-                        label = { Text(st.label) }
+                        label = { Text(st.label) },
+                        shape = CircleShape
                     )
                 }
             }
@@ -1441,7 +1647,8 @@ fun SearchFilterBottomSheet(
                         onClick = {
                             selectedGenres = if (active) selectedGenres - genre else selectedGenres + genre
                         },
-                        label = { Text(genre) }
+                        label = { Text(genre) },
+                        shape = CircleShape
                     )
                 }
             }
@@ -1452,6 +1659,7 @@ fun SearchFilterBottomSheet(
                     onValueChange = { author = it },
                     label = { Text("Author / Artist") },
                     singleLine = true,
+                    shape = RoundedCornerShape(14.dp),
                     modifier = Modifier.weight(1f)
                 )
                 OutlinedTextField(
@@ -1459,6 +1667,7 @@ fun SearchFilterBottomSheet(
                     onValueChange = { yearStr = it.filter { ch -> ch.isDigit() }.take(4) },
                     label = { Text("Year") },
                     singleLine = true,
+                    shape = RoundedCornerShape(14.dp),
                     modifier = Modifier.width(100.dp)
                 )
             }
@@ -1468,7 +1677,8 @@ fun SearchFilterBottomSheet(
                     FilterChip(
                         selected = contentRating == id,
                         onClick = { contentRating = id },
-                        label = { Text(label) }
+                        label = { Text(label) },
+                        shape = CircleShape
                     )
                 }
                 Spacer(Modifier.weight(1f))
@@ -1476,7 +1686,8 @@ fun SearchFilterBottomSheet(
                     FilterChip(
                         selected = selectedLang == id,
                         onClick = { selectedLang = id },
-                        label = { Text(label) }
+                        label = { Text(label) },
+                        shape = CircleShape
                     )
                 }
             }
@@ -1500,7 +1711,8 @@ fun SearchFilterBottomSheet(
                                 sortBy = sortBy
                             )
                         )
-                    }
+                    },
+                    shape = CircleShape
                 ) {
                     Text("Apply Filters")
                 }
