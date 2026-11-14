@@ -128,6 +128,7 @@ dependencies {
   implementation(libs.logging.interceptor)
   implementation(libs.moshi.kotlin)
   implementation(libs.okhttp)
+  implementation(libs.conscrypt.android)
   // implementation(libs.play.services.location)
   implementation(libs.retrofit)
   testImplementation(libs.androidx.compose.ui.test.junit4)
@@ -145,4 +146,15 @@ dependencies {
   debugImplementation(libs.androidx.compose.ui.tooling)
   "ksp"(libs.androidx.room.compiler)
   "ksp"(libs.moshi.kotlin.codegen)
+}
+
+// Local JVM unit tests (Robolectric) cannot load Android ABI .so libraries from conscrypt-android.
+// Substitute conscrypt-openjdk-uber on UnitTest classpaths while keeping conscrypt-android in APKs.
+configurations.configureEach {
+  if (name.contains("UnitTest", ignoreCase = true)) {
+    resolutionStrategy.dependencySubstitution {
+      substitute(module("org.conscrypt:conscrypt-android"))
+        .using(module("org.conscrypt:conscrypt-openjdk-uber:${libs.versions.conscryptAndroid.get()}"))
+    }
+  }
 }

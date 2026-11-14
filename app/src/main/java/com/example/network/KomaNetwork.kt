@@ -8,9 +8,11 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import okhttp3.*
+import org.conscrypt.Conscrypt
 import org.json.JSONObject
 import java.io.IOException
 import java.net.*
+import java.security.KeyStore
 import java.security.cert.CertPathValidatorException
 import java.security.cert.CertificateExpiredException
 import java.security.cert.CertificateNotYetValidException
@@ -19,10 +21,16 @@ import java.util.IdentityHashMap
 import java.util.WeakHashMap
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLException
 import javax.net.ssl.SSLHandshakeException
 import javax.net.ssl.SSLPeerUnverifiedException
 import javax.net.ssl.SSLProtocolException
+import javax.net.ssl.SSLSocket
+import javax.net.ssl.SSLSocketFactory
+import javax.net.ssl.TrustManager
+import javax.net.ssl.TrustManagerFactory
+import javax.net.ssl.X509TrustManager
 
 enum class DnsMode(val id: String, val label: String) {
     DOH_AUTO_FALLBACK("doh_auto", "IPv4 + DoH Auto Fallback"),
@@ -33,6 +41,180 @@ enum class DnsMode(val id: String, val label: String) {
 
     companion object {
         fun fromId(id: String): DnsMode = entries.firstOrNull { it.id == id } ?: DOH_AUTO_FALLBACK
+    }
+}
+
+data class TlsCapabilitiesSnapshot(
+    val providerName: String,
+    val usingConscrypt: Boolean,
+    val supportedProtocols: List<String>,
+    val enabledProtocols: List<String>,
+    val tls13Supported: Boolean,
+    val tls12Supported: Boolean
+)
+
+data class TlsFailureContext(
+    val host: String,
+    val path: String,
+    val resolvedIp: String? = null,
+    val attemptedTlsVersions: List<String> = emptyList(),
+    val tlsProvider: String? = null
+)
+
+/**
+ * Ensures every created [SSLSocket] explicitly enables modern TLS protocols
+ * (TLS 1.3 and TLS 1.2 where supported by the underlying factory), without
+ * enabling legacy TLS 1.0/1.1 or weakening certificate verification.
+ */
+class ModernTlsSocketFactory(
+    private val delegate: SSLSocketFactory,
+    private val preferredProtocols: List<String> = listOf("TLSv1.3", "TLSv1.2")
+) : SSLSocketFactory() {
+
+    override fun getDefaultCipherSuites(): Array<String> = delegate.defaultCipherSuites
+
+    override fun getSupportedCipherSuites(): Array<String> = delegate.supportedCipherSuites
+
+    override fun createSocket(): Socket = configure(delegate.createSocket())
+
+    override fun createSocket(s: Socket, host: String, port: Int, autoClose: Boolean): Socket =
+        configure(delegate.createSocket(s, host, port, autoClose))
+
+    override fun createSocket(host: String, port: Int): Socket =
+        configure(delegate.createSocket(host, port))
+
+    override fun createSocket(host: String, port: Int, localHost: InetAddress, localPort: Int): Socket =
+        configure(delegate.createSocket(host, port, localHost, localPort))
+
+    override fun createSocket(host: InetAddress, port: Int): Socket =
+        configure(delegate.createSocket(host, port))
+
+    override fun createSocket(address: InetAddress, port: Int, localAddress: InetAddress, localPort: Int): Socket =
+        configure(delegate.createSocket(address, port, localAddress, localPort))
+
+    private fun configure(socket: Socket): Socket {
+        if (socket is SSLSocket) {
+            val supported = socket.supportedProtocols?.toSet().orEmpty()
+            val target = preferredProtocols.filter { it in supported }
+            if (target.isNotEmpty()) {
+                socket.enabledProtocols = target.toTypedArray()
+            }
+        }
+        return socket
+    }
+}
+
+/**
+ * Provides strict TLS 1.3 + TLS 1.2 socket configuration backed by Android's
+ * platform [X509TrustManager] (preserving system/user trust anchors and
+ * `network_security_config.xml`). When the OS platform `SSLContext` lacks TLS 1.3
+ * (e.g., Android 7.0–9.0 / API 24–28), upgrades socket creation via bundled
+ * Conscrypt BoringSSL.
+ */
+object KomaTlsProvider {
+
+    data class TlsConfiguration(
+        val socketFactory: SSLSocketFactory,
+        val trustManager: X509TrustManager,
+        val capabilities: TlsCapabilitiesSnapshot
+    )
+
+    val configuration: TlsConfiguration by lazy { buildConfiguration() }
+
+    private fun buildConfiguration(): TlsConfiguration {
+        val platformTrustManager = loadPlatformTrustManager()
+        val platformContext = SSLContext.getInstance("TLS").apply {
+            init(null, arrayOf<TrustManager>(platformTrustManager), null)
+        }
+        val platformInspection = inspectSocketFactory(platformContext.socketFactory)
+        val platformSupportsTls13 = "TLSv1.3" in platformInspection.supported
+
+        if (!platformSupportsTls13) {
+            val conscryptConfig = tryBuildConscryptConfig(platformTrustManager)
+            if (conscryptConfig != null) {
+                runCatching {
+                    Log.i(
+                        "KomaTLS",
+                        "Platform lacks TLSv1.3 (supported=${platformInspection.supported}); enabled Conscrypt (${conscryptConfig.capabilities.enabledProtocols})"
+                    )
+                }
+                return conscryptConfig
+            }
+        }
+
+        val modernFactory = ModernTlsSocketFactory(platformContext.socketFactory)
+        val finalInspection = inspectSocketFactory(modernFactory)
+        val caps = TlsCapabilitiesSnapshot(
+            providerName = platformContext.provider.name,
+            usingConscrypt = false,
+            supportedProtocols = finalInspection.supported,
+            enabledProtocols = finalInspection.enabled,
+            tls13Supported = "TLSv1.3" in finalInspection.enabled,
+            tls12Supported = "TLSv1.2" in finalInspection.enabled
+        )
+        runCatching {
+            Log.d("KomaTLS", "TLS initialized via ${caps.providerName}: enabled=${caps.enabledProtocols}")
+        }
+        return TlsConfiguration(
+            socketFactory = modernFactory,
+            trustManager = platformTrustManager,
+            capabilities = caps
+        )
+    }
+
+    private fun tryBuildConscryptConfig(platformTrustManager: X509TrustManager): TlsConfiguration? {
+        return try {
+            if (!Conscrypt.isAvailable()) return null
+            val provider = Conscrypt.newProvider()
+            val ctx = runCatching { SSLContext.getInstance("TLSv1.3", provider) }
+                .getOrElse { SSLContext.getInstance("TLS", provider) }
+            ctx.init(null, arrayOf<TrustManager>(platformTrustManager), null)
+            val modernFactory = ModernTlsSocketFactory(ctx.socketFactory)
+            val inspection = inspectSocketFactory(modernFactory)
+            TlsConfiguration(
+                socketFactory = modernFactory,
+                trustManager = platformTrustManager,
+                capabilities = TlsCapabilitiesSnapshot(
+                    providerName = provider.name,
+                    usingConscrypt = true,
+                    supportedProtocols = inspection.supported,
+                    enabledProtocols = inspection.enabled,
+                    tls13Supported = "TLSv1.3" in inspection.enabled,
+                    tls12Supported = "TLSv1.2" in inspection.enabled
+                )
+            )
+        } catch (t: Throwable) {
+            // Gracefully falls back on desktop JVM / Robolectric where Android JNI .so is absent
+            runCatching {
+                Log.w("KomaTLS", "Conscrypt native provider unavailable (${t.javaClass.simpleName}); using platform TLS")
+            }
+            null
+        }
+    }
+
+    private fun loadPlatformTrustManager(): X509TrustManager {
+        val tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm())
+        tmf.init(null as KeyStore?)
+        return tmf.trustManagers
+            .filterIsInstance<X509TrustManager>()
+            .firstOrNull()
+            ?: throw IllegalStateException("No platform X509TrustManager available")
+    }
+
+    private data class SocketProtocolInspection(
+        val supported: List<String>,
+        val enabled: List<String>
+    )
+
+    private fun inspectSocketFactory(factory: SSLSocketFactory): SocketProtocolInspection {
+        return runCatching {
+            (factory.createSocket() as? SSLSocket)?.use { sock ->
+                SocketProtocolInspection(
+                    supported = sock.supportedProtocols?.toList().orEmpty(),
+                    enabled = sock.enabledProtocols?.toList().orEmpty()
+                )
+            }
+        }.getOrNull() ?: SocketProtocolInspection(emptyList(), emptyList())
     }
 }
 
@@ -77,6 +259,8 @@ class NetworkDiagnosticsTracker(private val context: Context) {
     fun clearLogs() {
         _logs.value = emptyList()
     }
+
+    fun inspectTlsCapabilities(): TlsCapabilitiesSnapshot = KomaTlsProvider.configuration.capabilities
 
     fun inspectConnectivity(): NetworkHealthSnapshot {
         return runCatching {
@@ -135,7 +319,9 @@ class KomaDns(
     private val dohPreferredHosts = ConcurrentHashMap.newKeySet<String>()
 
     private val bootstrapClient: OkHttpClient by lazy {
+        val tls = KomaTlsProvider.configuration
         OkHttpClient.Builder()
+            .sslSocketFactory(tls.socketFactory, tls.trustManager)
             .connectionSpecs(listOf(ConnectionSpec.MODERN_TLS))
             .followRedirects(true)
             .followSslRedirects(true)
@@ -392,10 +578,23 @@ class KomaNetworkEventListener(
         protocol: Protocol?,
         ioe: IOException
     ) {
-        val host = call.request().url.host
+        val url = call.request().url
+        val host = url.host
         val ip = inetSocketAddress.address?.hostAddress ?: inetSocketAddress.hostString
         val meta = callMeta.getOrPut(call) { CallTlsMeta() }
         meta.resolvedIp = "$ip:${inetSocketAddress.port}"
+
+        val tlsCaps = tracker.inspectTlsCapabilities()
+        NetworkErrorFormatter.attachFailureContext(
+            ioe,
+            TlsFailureContext(
+                host = host,
+                path = url.encodedPath,
+                resolvedIp = meta.resolvedIp,
+                attemptedTlsVersions = tlsCaps.enabledProtocols,
+                tlsProvider = tlsCaps.providerName
+            )
+        )
 
         if (NetworkErrorFormatter.isTlsVerificationFailure(ioe)) {
             if (komaDns.mode == DnsMode.DOH_AUTO_FALLBACK && !komaDns.isHostDohPreferred(host)) {
@@ -405,27 +604,45 @@ class KomaNetworkEventListener(
             runCatching {
                 Log.w(
                     "KomaTLS",
-                    "TLS handshake failed host=$host ip=${meta.resolvedIp} cause=$causeSummary"
+                    "TLS handshake failed host=$host path=${url.encodedPath} ip=${meta.resolvedIp} clientTls=${tlsCaps.enabledProtocols} (${tlsCaps.providerName}) exception=${ioe.javaClass.simpleName} cause=$causeSummary"
+                )
+            }
+        } else if (NetworkErrorFormatter.isAnySslException(ioe)) {
+            runCatching {
+                Log.w(
+                    "KomaTLS",
+                    "TLS protocol/socket failed host=$host path=${url.encodedPath} ip=${meta.resolvedIp} clientTls=${tlsCaps.enabledProtocols} (${tlsCaps.providerName}) exception=${ioe.javaClass.simpleName}: ${ioe.message}"
                 )
             }
         } else {
             runCatching {
                 Log.w(
                     "KomaNet",
-                    "Connect failed host=$host ip=${meta.resolvedIp} error=${ioe.javaClass.simpleName}: ${ioe.message}"
+                    "Connect failed host=$host path=${url.encodedPath} ip=${meta.resolvedIp} error=${ioe.javaClass.simpleName}: ${ioe.message}"
                 )
             }
         }
     }
 
     override fun callFailed(call: Call, ioe: IOException) {
-        if (NetworkErrorFormatter.isTlsVerificationFailure(ioe)) {
-            val url = call.request().url
-            val meta = callMeta[call]
+        val url = call.request().url
+        val meta = callMeta[call]
+        val tlsCaps = tracker.inspectTlsCapabilities()
+        NetworkErrorFormatter.attachFailureContext(
+            ioe,
+            TlsFailureContext(
+                host = url.host,
+                path = url.encodedPath,
+                resolvedIp = meta?.resolvedIp,
+                attemptedTlsVersions = tlsCaps.enabledProtocols,
+                tlsProvider = tlsCaps.providerName
+            )
+        )
+        if (NetworkErrorFormatter.isAnySslException(ioe)) {
             runCatching {
                 Log.w(
                     "KomaTLS",
-                    "Call failed TLS host=${url.host} path=${url.encodedPath} ip=${meta?.resolvedIp ?: "?"} detail=${NetworkErrorFormatter.describe(ioe, url.host)}"
+                    "Call failed TLS host=${url.host} path=${url.encodedPath} ip=${meta?.resolvedIp ?: "?"} clientTls=${tlsCaps.enabledProtocols} (${tlsCaps.providerName}) detail=${NetworkErrorFormatter.describe(ioe, url.host)}"
                 )
             }
         }
@@ -477,6 +694,17 @@ class KomaNetworkInterceptor(
         } catch (t: Throwable) {
             val firstMeta = eventListener?.consumeCallMeta(chain.call())
             val elapsed = System.currentTimeMillis() - start
+            val tlsCaps = tracker.inspectTlsCapabilities()
+            NetworkErrorFormatter.attachFailureContext(
+                t,
+                TlsFailureContext(
+                    host = host,
+                    path = path,
+                    resolvedIp = firstMeta?.resolvedIp,
+                    attemptedTlsVersions = tlsCaps.enabledProtocols,
+                    tlsProvider = tlsCaps.providerName
+                )
+            )
             val described = NetworkErrorFormatter.describe(t, host)
             tracker.record(
                 NetworkLogEntry(
@@ -485,7 +713,9 @@ class KomaNetworkInterceptor(
                     statusCode = null,
                     durationMs = elapsed,
                     errorSummary = described,
-                    tlsInfo = firstMeta?.tlsInfo,
+                    tlsInfo = firstMeta?.tlsInfo ?: tlsCaps.enabledProtocols.takeIf { it.isNotEmpty() }?.let {
+                        "Attempted ${it.joinToString("/")} (${tlsCaps.providerName})"
+                    },
                     resolvedIp = firstMeta?.resolvedIp
                 )
             )
@@ -516,6 +746,16 @@ class KomaNetworkInterceptor(
                 } catch (retryErr: Throwable) {
                     val retryMeta = eventListener?.consumeCallMeta(chain.call())
                     val retryElapsed = System.currentTimeMillis() - retryStart
+                    NetworkErrorFormatter.attachFailureContext(
+                        retryErr,
+                        TlsFailureContext(
+                            host = host,
+                            path = path,
+                            resolvedIp = retryMeta?.resolvedIp,
+                            attemptedTlsVersions = tlsCaps.enabledProtocols,
+                            tlsProvider = tlsCaps.providerName
+                        )
+                    )
                     tracker.record(
                         NetworkLogEntry(
                             host = host,
@@ -538,6 +778,28 @@ class KomaNetworkInterceptor(
 
 object NetworkErrorFormatter {
 
+    private val failureContexts = Collections.synchronizedMap(WeakHashMap<Throwable, TlsFailureContext>())
+
+    fun attachFailureContext(error: Throwable?, context: TlsFailureContext) {
+        if (error == null) return
+        unwrapChain(error).forEach { node ->
+            val existing = failureContexts[node]
+            if (existing == null) {
+                failureContexts[node] = context
+            } else if (existing.resolvedIp == null && context.resolvedIp != null) {
+                failureContexts[node] = existing.copy(resolvedIp = context.resolvedIp)
+            }
+        }
+    }
+
+    private fun resolveFailureContext(chain: List<Throwable>): TlsFailureContext? {
+        for (node in chain) {
+            val ctx = failureContexts[node]
+            if (ctx != null) return ctx
+        }
+        return null
+    }
+
     fun isTlsVerificationFailure(error: Throwable?): Boolean {
         return unwrapChain(error).any {
             it is SSLHandshakeException ||
@@ -548,24 +810,35 @@ object NetworkErrorFormatter {
         }
     }
 
+    fun isAnySslException(error: Throwable?): Boolean {
+        return isTlsVerificationFailure(error) || unwrapChain(error).any { it is SSLException }
+    }
+
     fun describe(error: Throwable?, hostHint: String? = null): String {
         if (error == null) return "Unknown network error"
         val chain = unwrapChain(error)
-        val hostPrefix = if (!hostHint.isNullOrBlank()) " for $hostHint" else ""
+        val ctx = resolveFailureContext(chain)
+        val effectiveHost = hostHint?.takeIf { it.isNotBlank() } ?: ctx?.host
+        val pathSuffix = ctx?.path?.takeIf { it.isNotBlank() && it != "/" }?.let { " ($it)" }.orEmpty()
+        val hostPrefix = if (!effectiveHost.isNullOrBlank()) " for $effectiveHost$pathSuffix" else ""
+        val tlsMetaSuffix = if (ctx != null && ctx.attemptedTlsVersions.isNotEmpty()) {
+            val prov = ctx.tlsProvider?.let { " via $it" }.orEmpty()
+            " [TLS: ${ctx.attemptedTlsVersions.joinToString("/")}$prov]"
+        } else ""
 
         val expired = chain.filterIsInstance<CertificateExpiredException>().firstOrNull()
         if (expired != null) {
-            return "TLS/SSL certificate handshake failed$hostPrefix: server certificate expired or device clock is ahead (${expired.message ?: "check date/time"})."
+            return "TLS/SSL certificate handshake failed$hostPrefix: server certificate expired or device clock is ahead (${expired.message ?: "check date/time"}).$tlsMetaSuffix"
         }
 
         val notYetValid = chain.filterIsInstance<CertificateNotYetValidException>().firstOrNull()
         if (notYetValid != null) {
-            return "TLS/SSL certificate handshake failed$hostPrefix: certificate not yet valid — check device date/time (${notYetValid.message ?: "clock mismatch"})."
+            return "TLS/SSL certificate handshake failed$hostPrefix: certificate not yet valid — check device date/time (${notYetValid.message ?: "clock mismatch"}).$tlsMetaSuffix"
         }
 
         val peerUnverified = chain.filterIsInstance<SSLPeerUnverifiedException>().firstOrNull()
         if (peerUnverified != null) {
-            return "TLS/SSL certificate handshake failed$hostPrefix: hostname verification failed (${peerUnverified.message ?: "possible ISP DNS hijack or captive portal"})."
+            return "TLS/SSL certificate handshake failed$hostPrefix: hostname verification failed (${peerUnverified.message ?: "possible ISP DNS hijack or captive portal"}).$tlsMetaSuffix"
         }
 
         val certPath = chain.filterIsInstance<CertPathValidatorException>().firstOrNull()
@@ -576,28 +849,28 @@ object NetworkErrorFormatter {
             } else {
                 raw.ifBlank { "certificate chain validation failed" }
             }
-            return "TLS/SSL certificate handshake failed$hostPrefix: $detail."
+            return "TLS/SSL certificate handshake failed$hostPrefix: $detail.$tlsMetaSuffix"
         }
 
         val protocolErr = chain.filterIsInstance<SSLProtocolException>().firstOrNull()
         if (protocolErr != null) {
-            return "TLS/SSL certificate handshake failed$hostPrefix: protocol negotiation error (${protocolErr.message ?: "TLS version or cipher mismatch"})."
+            return "TLS/SSL certificate handshake failed$hostPrefix: protocol negotiation error [${protocolErr.javaClass.simpleName}] (${protocolErr.message ?: "TLS version or cipher mismatch"}).$tlsMetaSuffix"
         }
 
         val handshake = chain.filterIsInstance<SSLHandshakeException>().firstOrNull()
         if (handshake != null) {
             val deepest = chain.lastOrNull { !it.message.isNullOrBlank() }?.message ?: handshake.message
-            return "TLS/SSL certificate handshake failed$hostPrefix (${deepest ?: "check device date/time or network proxy"})."
+            return "TLS/SSL certificate handshake failed$hostPrefix [${handshake.javaClass.simpleName}] (${deepest ?: "check device date/time or network proxy"}).$tlsMetaSuffix"
         }
 
         val sslOther = chain.filterIsInstance<SSLException>().firstOrNull()
         if (sslOther != null) {
-            return "TLS/SSL connection failed$hostPrefix (${sslOther.message ?: "secure socket error"})."
+            return "TLS/SSL connection failed$hostPrefix [${sslOther.javaClass.simpleName}] (${sslOther.message ?: "secure socket error"}).$tlsMetaSuffix"
         }
 
         val unknownHost = chain.filterIsInstance<UnknownHostException>().firstOrNull()
         if (unknownHost != null) {
-            return "DNS lookup failed for host (${unknownHost.message ?: hostHint ?: "unknown"}). Try Cloudflare/Google DoH in Settings -> Network."
+            return "DNS lookup failed for host (${unknownHost.message ?: effectiveHost ?: "unknown"}). Try Cloudflare/Google DoH in Settings -> Network."
         }
 
         val timeout = chain.filterIsInstance<SocketTimeoutException>().firstOrNull()
@@ -617,7 +890,11 @@ object NetworkErrorFormatter {
 
         val io = chain.filterIsInstance<IOException>().firstOrNull()
         if (io != null) {
-            return io.message ?: "Network I/O error"
+            return if (!effectiveHost.isNullOrBlank() && io.message != null && !io.message!!.contains(effectiveHost)) {
+                "${io.message} ($effectiveHost$pathSuffix)"
+            } else {
+                io.message ?: "Network I/O error$hostPrefix"
+            }
         }
 
         return error.message ?: error.javaClass.simpleName
@@ -637,4 +914,5 @@ object NetworkErrorFormatter {
         return list
     }
 }
+
 

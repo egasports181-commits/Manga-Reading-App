@@ -14,6 +14,7 @@ import com.example.extension.ExtensionSessionManager
 import com.example.network.KomaDns
 import com.example.network.KomaNetworkEventListener
 import com.example.network.KomaNetworkInterceptor
+import com.example.network.KomaTlsProvider
 import com.example.network.NetworkDiagnosticsTracker
 import com.example.source.SourceRegistry
 import com.example.util.CbzEntryFetcher
@@ -42,12 +43,15 @@ class AppContainer(context: Context) {
     val networkEventListener = KomaNetworkEventListener(networkDiagnostics, komaDns)
     val networkInterceptor = KomaNetworkInterceptor(networkDiagnostics, komaDns, networkEventListener)
 
+    val tlsConfig = KomaTlsProvider.configuration
+
     val httpClient: OkHttpClient = OkHttpClient.Builder()
         .dns(komaDns)
         .cookieJar(sessionManager.cookieJar)
+        .sslSocketFactory(tlsConfig.socketFactory, tlsConfig.trustManager)
         .eventListenerFactory { networkEventListener }
         .addInterceptor(networkInterceptor)
-        .connectionSpecs(listOf(ConnectionSpec.MODERN_TLS, ConnectionSpec.COMPATIBLE_TLS))
+        .connectionSpecs(listOf(ConnectionSpec.MODERN_TLS))
         .followRedirects(true)
         .followSslRedirects(true)
         .retryOnConnectionFailure(true)

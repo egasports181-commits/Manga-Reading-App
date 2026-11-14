@@ -20,7 +20,10 @@ import com.example.extension.ExtensionIndexParser
 import com.example.extension.ExtensionRepositoryManager
 import com.example.network.DnsMode
 import com.example.network.KomaDns
+import com.example.network.KomaTlsProvider
+import com.example.network.ModernTlsSocketFactory
 import com.example.network.NetworkErrorFormatter
+import com.example.network.TlsFailureContext
 import com.example.source.MangaDexSourceAdapter
 import com.example.source.SourceRegistry
 import com.example.ui.screens.reader.TapZoneAction
@@ -43,8 +46,11 @@ import java.security.cert.CertificateException
 import java.security.cert.CertificateExpiredException
 import java.security.cert.CertificateNotYetValidException
 import java.util.zip.GZIPOutputStream
+import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLHandshakeException
 import javax.net.ssl.SSLPeerUnverifiedException
+import javax.net.ssl.SSLProtocolException
+import javax.net.ssl.SSLSocket
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36])
@@ -756,9 +762,10 @@ class KomaUpgradeRobolectricTest {
         val container = AppContainer(context)
         val client = container.httpClient
 
-        // Must never allow cleartext in httpClient connectionSpecs
-        assertTrue(client.connectionSpecs.isNotEmpty())
+        // Must never allow cleartext in httpClient connectionSpecs, and only allow MODERN_TLS (1.3 / 1.2)
+        assertEquals(1, client.connectionSpecs.size)
         assertTrue(client.connectionSpecs.all { it.isTls })
+        assertFalse(client.connectionSpecs.first().tlsVersions?.any { it.javaName == "TLSv1" || it.javaName == "TLSv1.1" } == true)
 
         // Must keep strict X509TrustManager (rejects empty cert chain instead of trusting all)
         val tm = client.x509TrustManager
@@ -779,5 +786,45 @@ class KomaUpgradeRobolectricTest {
             "https://api.mangadex.org/at-home/server/abc-123?forcePort443=true",
             adapter.buildAtHomeRequestUrl("abc-123")
         )
+    }
+
+    @Test
+    fun `modern tls socket factory enables tls 1_3 and 1_2 without legacy tls and formats protocol diagnostics`() {
+        val tlsConfig = KomaTlsProvider.configuration
+        assertTrue(tlsConfig.capabilities.tls13Supported)
+        assertTrue(tlsConfig.capabilities.tls12Supported)
+        assertTrue(tlsConfig.capabilities.enabledProtocols.containsAll(listOf("TLSv1.3", "TLSv1.2")))
+
+        val baseFactory = SSLContext.getInstance("TLS").apply { init(null, null, null) }.socketFactory
+        val wrappedFactory = ModernTlsSocketFactory(baseFactory)
+        val sock = wrappedFactory.createSocket() as SSLSocket
+        sock.use { s ->
+            val enabled = s.enabledProtocols.toSet()
+            assertTrue("TLSv1.3" in enabled)
+            assertTrue("TLSv1.2" in enabled)
+            assertFalse("TLSv1" in enabled)
+            assertFalse("TLSv1.1" in enabled)
+            assertFalse("SSLv3" in enabled)
+        }
+
+        val protoErr = SSLProtocolException("TLSV1_ALERT_PROTOCOL_VERSION")
+        NetworkErrorFormatter.attachFailureContext(
+            protoErr,
+            TlsFailureContext(
+                host = "api.mangadex.org",
+                path = "/manga",
+                resolvedIp = "172.66.0.1:443",
+                attemptedTlsVersions = listOf("TLSv1.3", "TLSv1.2"),
+                tlsProvider = "Conscrypt"
+            )
+        )
+        assertFalse(NetworkErrorFormatter.isTlsVerificationFailure(protoErr))
+        assertTrue(NetworkErrorFormatter.isAnySslException(protoErr))
+        val formatted = NetworkErrorFormatter.describe(protoErr)
+        assertTrue(formatted.contains("api.mangadex.org"))
+        assertTrue(formatted.contains("/manga"))
+        assertTrue(formatted.contains("SSLProtocolException"))
+        assertTrue(formatted.contains("TLSv1.3/TLSv1.2"))
+        assertTrue(formatted.contains("TLSV1_ALERT_PROTOCOL_VERSION"))
     }
 }

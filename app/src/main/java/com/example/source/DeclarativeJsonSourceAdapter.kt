@@ -4,6 +4,7 @@ import com.example.domain.model.*
 import com.example.network.NetworkErrorFormatter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONArray
@@ -54,7 +55,7 @@ class DeclarativeJsonSourceAdapter(
             SourceHealthStatus(
                 isOnline = false,
                 latencyMs = (System.currentTimeMillis() - start).coerceAtLeast(1L),
-                errorReason = NetworkErrorFormatter.describe(e)
+                errorReason = NetworkErrorFormatter.describe(e, baseUrl.toHttpUrlOrNull()?.host)
             )
         }
     }

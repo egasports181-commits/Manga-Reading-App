@@ -55,6 +55,7 @@ fun NetworkDiagnosticsScreen(
     val scope = rememberCoroutineScope()
 
     var health by remember { mutableStateOf(container.networkDiagnostics.inspectConnectivity()) }
+    val tlsCaps = remember { container.networkDiagnostics.inspectTlsCapabilities() }
     var probeResults by remember { mutableStateOf<List<EndpointProbeResult>>(emptyList()) }
     var isProbing by remember { mutableStateOf(false) }
 
@@ -169,6 +170,46 @@ fun NetworkDiagnosticsScreen(
                                 Text("Retry Failed Repos")
                             }
                         }
+                    }
+                }
+            }
+
+            item {
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceContainer,
+                    shape = MaterialTheme.shapes.medium,
+                    border = BorderStroke(
+                        1.dp,
+                        if (tlsCaps.tls13Supported) StatusOngoing.copy(alpha = 0.35f) else StatusError.copy(alpha = 0.45f)
+                    )
+                ) {
+                    Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Lock,
+                                contentDescription = null,
+                                tint = if (tlsCaps.tls13Supported) StatusOngoing else StatusError,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Text(
+                                text = "Client TLS Stack (${tlsCaps.providerName}${if (tlsCaps.usingConscrypt) " • Bundled" else ""})",
+                                style = MaterialTheme.typography.titleSmall
+                            )
+                        }
+                        Text(
+                            text = "TLS 1.3: ${if (tlsCaps.tls13Supported) "Enabled" else "Unsupported"} • TLS 1.2: ${if (tlsCaps.tls12Supported) "Enabled" else "Unsupported"}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (tlsCaps.tls13Supported) StatusOngoing else StatusError
+                        )
+                        Text(
+                            text = "Enabled protocols: ${tlsCaps.enabledProtocols.joinToString(", ").ifBlank { "None" }}",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                 }
             }

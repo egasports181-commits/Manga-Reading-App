@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withContext
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
@@ -193,7 +194,7 @@ class ExtensionPackageManager(
             } catch (e: Exception) {
                 tempFile.delete()
                 _downloadProgress.update { it - pkg.pkgId }
-                val message = NetworkErrorFormatter.describe(e)
+                val message = NetworkErrorFormatter.describe(e, apkUrl.toHttpUrlOrNull()?.host)
                 extensionDao.upsertPackage(pkg.copy(installError = message, updatedAt = System.currentTimeMillis()))
                 recordHistory(pkg, "VERIFY_APK", "FAILED", message)
                 Result.failure(IOException(message, e))

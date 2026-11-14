@@ -282,7 +282,7 @@ class ExtensionRepositoryManager(
             )
             Result.success(merged.size)
         } catch (e: Exception) {
-            val formatted = NetworkErrorFormatter.describe(e)
+            val formatted = NetworkErrorFormatter.describe(e, repo.indexUrl.toHttpUrlOrNull()?.host)
             extensionDao.upsertRepo(
                 repo.copy(
                     lastRefreshedAt = System.currentTimeMillis(),
