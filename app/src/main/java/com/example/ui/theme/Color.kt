@@ -4,33 +4,38 @@ import androidx.compose.ui.graphics.Color
 
 // Deep Charcoal & Obsidian Dark Palette
 val AmoledBlack = Color(0xFF000000)
-val ObsidianBg = Color(0xFF0C0D11)
-val ObsidianSurfaceLowest = Color(0xFF090A0D)
-val ObsidianSurface = Color(0xFF13151C)
-val ObsidianSurfaceHigh = Color(0xFF1B1E27)
-val ObsidianSurfaceHighest = Color(0xFF242834)
-val ObsidianOutline = Color(0xFF303545)
-val InkWhite = Color(0xFFF4F4F7)
-val InkMuted = Color(0xFF9BA1B4)
+val ObsidianBg = Color(0xFF08080C)
+val ObsidianSurfaceLowest = Color(0xFF060609)
+val ObsidianSurface = Color(0xFF121318)
+val ObsidianSurfaceHigh = Color(0xFF1B1C23)
+val ObsidianSurfaceHighest = Color(0xFF252731)
+val ObsidianOutline = Color(0xFF2E313D)
+val InkWhite = Color(0xFFF7F7FA)
+val InkMuted = Color(0xFF989AA8)
 
-// Warm Off-White & Neutral Light Palette
-val DaylightBg = Color(0xFFF6F5F2)
+// Clean Crisp White & Subtle Gray Light Palette
+val DaylightBg = Color(0xFFFFFFFF)
 val DaylightSurfaceLowest = Color(0xFFFFFFFF)
-val DaylightSurface = Color(0xFFFCFBF9)
-val DaylightSurfaceHigh = Color(0xFFEFEDE8)
-val DaylightSurfaceHighest = Color(0xFFE5E2DC)
-val DaylightOutline = Color(0xFFD6D2C9)
-val DaylightInk = Color(0xFF14151A)
-val DaylightMuted = Color(0xFF606472)
+val DaylightSurface = Color(0xFFFAFAFC)
+val DaylightSurfaceHigh = Color(0xFFF3F4F7)
+val DaylightSurfaceHighest = Color(0xFFE9EBEF)
+val DaylightOutline = Color(0xFFE3E4EA)
+val DaylightInk = Color(0xFF111114)
+val DaylightMuted = Color(0xFF6B6E7B)
 
-// Signature Warm Orange Tokens (sophisticated persimmon-amber, balanced contrast in Dark & Light)
-val WarmOrangeDark = Color(0xFFF37A37)
-val WarmOrangeLight = Color(0xFFE2631D)
-val WarmOrangeSoft = Color(0xFFFFA366)
-val WarmOrangeContainerDark = Color(0xFF3A1E0E)
-val WarmOrangeContainerLight = Color(0xFFFCE7DA)
+// Signature Vibrant Red-Orange Tokens
+val WarmOrangeDark = Color(0xFFEF5325)
+val WarmOrangeLight = Color(0xFFEF4B24)
+val WarmOrangeSoft = Color(0xFFFF7A45)
+val WarmOrangeContainerDark = Color(0xFF3E150A)
+val WarmOrangeContainerLight = Color(0xFFFFECE6)
 
-// Expressive Accent Presets (Warm Orange is the default Koma signature)
+// Detail Crimson Backdrop Accents
+val DetailCrimsonTop = Color(0xFF7D0D12)
+val DetailCrimsonMid = Color(0xFF2B0608)
+val DetailObsidian = Color(0xFF070709)
+
+// Expressive Accent Presets (Vibrant Warm Orange is the default Koma signature)
 enum class AccentPreset(
     val id: String,
     val label: String,
@@ -50,7 +55,7 @@ enum class AccentPreset(
         onPrimary = Color(0xFFFFFFFF),
         primaryContainer = WarmOrangeContainerDark,
         lightPrimaryContainer = WarmOrangeContainerLight,
-        secondary = Color(0xFFF5A623),
+        secondary = Color(0xFFFF3B30),
         tertiary = Color(0xFF38BDF8)
     ),
     CRIMSON_INK(

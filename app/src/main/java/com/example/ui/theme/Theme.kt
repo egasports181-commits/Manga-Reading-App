@@ -27,7 +27,7 @@ enum class ThemeMode(val id: String, val label: String) {
     LIGHT("light", "Light");
 
     companion object {
-        fun fromId(id: String): ThemeMode = entries.firstOrNull { it.id == id } ?: DARK
+        fun fromId(id: String): ThemeMode = entries.firstOrNull { it.id == id } ?: LIGHT
     }
 }
 
@@ -41,7 +41,7 @@ val KomaShapes = Shapes(
 
 @Composable
 fun KomaTheme(
-    themeMode: ThemeMode = ThemeMode.DARK,
+    themeMode: ThemeMode = ThemeMode.LIGHT,
     amoledBlack: Boolean = false,
     dynamicColor: Boolean = false,
     accentPreset: AccentPreset = AccentPreset.WARM_ORANGE,

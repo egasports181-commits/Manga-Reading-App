@@ -15,7 +15,7 @@ private val Context.dataStore by preferencesDataStore(name = "koma_preferences")
 data class UserPreferences(
     // General & Appearance
     val appLanguage: String = "en",
-    val themeMode: ThemeMode = ThemeMode.DARK,
+    val themeMode: ThemeMode = ThemeMode.LIGHT,
     val amoledBlack: Boolean = false,
     val dynamicColor: Boolean = false,
     val accentPreset: AccentPreset = AccentPreset.WARM_ORANGE,
@@ -151,7 +151,7 @@ class AppPreferencesRepository(private val context: Context) {
 
         UserPreferences(
             appLanguage = prefs[Keys.APP_LANGUAGE] ?: "en",
-            themeMode = ThemeMode.fromId(prefs[Keys.THEME_MODE] ?: "dark"),
+            themeMode = ThemeMode.fromId(prefs[Keys.THEME_MODE] ?: "light"),
             amoledBlack = prefs[Keys.AMOLED_BLACK] ?: false,
             dynamicColor = prefs[Keys.DYNAMIC_COLOR] ?: false,
             accentPreset = AccentPreset.fromId(prefs[Keys.ACCENT_PRESET] ?: "warm_orange"),

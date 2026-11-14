@@ -270,7 +270,8 @@ data class GlassNavTab(
     val selectedIcon: ImageVector,
     val unselectedIcon: ImageVector,
     val testTag: String,
-    val badgeCount: Int = 0
+    val badgeCount: Int = 0,
+    val isCenterHighlighted: Boolean = false
 )
 
 @Composable
@@ -281,97 +282,138 @@ fun LiquidGlassFloatingNavBar(
     modifier: Modifier = Modifier
 ) {
     val isDark = rememberIsDarkSurface()
-    Box(
+    val barBg = if (isDark) Color(0xFF101116).copy(alpha = 0.96f) else Color(0xFFFFFFFF).copy(alpha = 0.98f)
+    val dividerColor = if (isDark) Color.White.copy(alpha = 0.08f) else Color(0xFFE5E6EC)
+
+    Surface(
         modifier = modifier
             .fillMaxWidth()
-            .navigationBarsPadding()
-            .padding(horizontal = 14.dp, vertical = 10.dp),
-        contentAlignment = Alignment.Center
+            .shadow(
+                elevation = 14.dp,
+                ambientColor = Color.Black.copy(alpha = if (isDark) 0.45f else 0.08f),
+                spotColor = Color.Black.copy(alpha = if (isDark) 0.45f else 0.08f)
+            ),
+        color = barBg
     ) {
-        LiquidGlassSurface(
-            modifier = Modifier
-                .fillMaxWidth()
-                .widthIn(max = 520.dp),
-            shape = RoundedCornerShape(30.dp),
-            shadowElevation = 16.dp,
-            tintOverlay = if (isDark) {
-                Color(0xFF171922).copy(alpha = 0.88f)
-            } else {
-                Color(0xFFFCFBF9).copy(alpha = 0.92f)
-            }
-        ) {
+        Column(modifier = Modifier.fillMaxWidth().navigationBarsPadding()) {
+            HorizontalDivider(thickness = 0.75.dp, color = dividerColor)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 6.dp, vertical = 6.dp),
+                    .widthIn(max = 560.dp)
+                    .align(Alignment.CenterHorizontally)
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
                 horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 tabs.forEach { tab ->
                     val selected = tab.id == selectedId
-                    val pillColor by animateColorAsState(
-                        targetValue = if (selected) {
-                            MaterialTheme.colorScheme.primary.copy(alpha = if (isDark) 0.22f else 0.14f)
-                        } else {
-                            Color.Transparent
-                        },
-                        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
-                        label = "navPillBg"
-                    )
-                    val contentColor by animateColorAsState(
-                        targetValue = if (selected) {
-                            MaterialTheme.colorScheme.primary
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        },
-                        label = "navPillFg"
-                    )
-
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .heightIn(min = 48.dp)
-                            .clip(RoundedCornerShape(24.dp))
-                            .background(pillColor)
-                            .clickable(
-                                interactionSource = remember { MutableInteractionSource() },
-                                indication = ripple(bounded = true),
-                                onClick = { onSelect(tab) }
-                            )
-                            .padding(vertical = 6.dp, horizontal = 2.dp)
-                            .testTag(tab.testTag),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(2.dp)
+                    if (tab.isCenterHighlighted) {
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .padding(horizontal = 4.dp)
+                                .heightIn(min = 50.dp)
+                                .shadow(
+                                    elevation = if (selected) 10.dp else 6.dp,
+                                    shape = RoundedCornerShape(16.dp),
+                                    ambientColor = Color(0xFFFF5228).copy(alpha = 0.55f),
+                                    spotColor = Color(0xFFFF5228).copy(alpha = 0.55f)
+                                )
+                                .clip(RoundedCornerShape(16.dp))
+                                .background(
+                                    Brush.verticalGradient(
+                                        colors = listOf(
+                                            Color(0xFFFF4224),
+                                            Color(0xFFFF7A3B)
+                                        )
+                                    )
+                                )
+                                .clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = ripple(bounded = true, color = Color.White),
+                                    onClick = { onSelect(tab) }
+                                )
+                                .padding(vertical = 6.dp, horizontal = 6.dp)
+                                .testTag(tab.testTag),
+                            contentAlignment = Alignment.Center
                         ) {
-                            Box {
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(2.dp)
+                            ) {
                                 Icon(
-                                    imageVector = if (selected) tab.selectedIcon else tab.unselectedIcon,
+                                    imageVector = tab.selectedIcon,
                                     contentDescription = tab.label,
-                                    tint = contentColor,
+                                    tint = Color.White,
                                     modifier = Modifier.size(21.dp)
                                 )
-                                if (tab.badgeCount > 0) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(8.dp)
-                                            .align(Alignment.TopEnd)
-                                            .clip(CircleShape)
-                                            .background(MaterialTheme.colorScheme.primary)
-                                    )
-                                }
+                                Text(
+                                    text = tab.label,
+                                    fontSize = 10.sp,
+                                    lineHeight = 12.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = Color.White,
+                                    maxLines = 1,
+                                    letterSpacing = 0.6.sp
+                                )
                             }
-                            Text(
-                                text = tab.label,
-                                fontSize = 11.sp,
-                                lineHeight = 13.sp,
-                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                                color = contentColor,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
+                        }
+                    } else {
+                        val contentColor by animateColorAsState(
+                            targetValue = if (selected) {
+                                MaterialTheme.colorScheme.onBackground
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                            label = "navPillFg"
+                        )
+
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .heightIn(min = 50.dp)
+                                .clip(RoundedCornerShape(14.dp))
+                                .clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = ripple(bounded = true),
+                                    onClick = { onSelect(tab) }
+                                )
+                                .padding(vertical = 6.dp, horizontal = 2.dp)
+                                .testTag(tab.testTag),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(3.dp)
+                            ) {
+                                Box {
+                                    Icon(
+                                        imageVector = if (selected) tab.selectedIcon else tab.unselectedIcon,
+                                        contentDescription = tab.label,
+                                        tint = contentColor,
+                                        modifier = Modifier.size(22.dp)
+                                    )
+                                    if (tab.badgeCount > 0) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(8.dp)
+                                                .align(Alignment.TopEnd)
+                                                .clip(CircleShape)
+                                                .background(MaterialTheme.colorScheme.primary)
+                                        )
+                                    }
+                                }
+                                Text(
+                                    text = tab.label,
+                                    fontSize = 11.sp,
+                                    lineHeight = 13.sp,
+                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                                    color = contentColor,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
                         }
                     }
                 }

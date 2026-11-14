@@ -71,8 +71,8 @@ private data class TopTabItem(
 private val topTabs = listOf(
     TopTabItem("home", HomeRoute, "Home", Icons.Filled.Home, Icons.Outlined.Home, "nav_home"),
     TopTabItem("sources", SourcesRoute, "Sources", Icons.Filled.Explore, Icons.Outlined.Explore, "nav_sources"),
-    TopTabItem("library", LibraryRoute, "Library", Icons.Filled.CollectionsBookmark, Icons.Outlined.CollectionsBookmark, "nav_library"),
-    TopTabItem("updates", UpdatesRoute, "Updates", Icons.Filled.NewReleases, Icons.Outlined.NewReleases, "nav_updates"),
+    TopTabItem("library", LibraryRoute, "READ", Icons.Filled.MenuBook, Icons.Outlined.MenuBook, "nav_library"),
+    TopTabItem("updates", UpdatesRoute, "Updates", Icons.Filled.CollectionsBookmark, Icons.Outlined.CollectionsBookmark, "nav_updates"),
     TopTabItem("more", MoreRoute, "More", Icons.Filled.MoreHoriz, Icons.Outlined.MoreHoriz, "nav_more")
 )
 
@@ -180,7 +180,8 @@ fun KomaAppNavigation(container: AppContainer) {
                             onNavigateToSources = { navigateTab(SourcesRoute) },
                             onOpenSource = { srcId -> navController.navigate(SourceBrowseRoute(srcId)) },
                             onNavigateToLibrary = { navigateTab(LibraryRoute) },
-                            onNavigateToDownloads = { navController.navigate(DownloadsRoute) }
+                            onNavigateToDownloads = { navController.navigate(DownloadsRoute) },
+                            onNavigateToUpdates = { navigateTab(UpdatesRoute) }
                         )
                     }
                     composable<SourcesRoute> {
@@ -299,13 +300,14 @@ fun KomaAppNavigation(container: AppContainer) {
 
             if (showChrome && !useRail) {
                 LiquidGlassFloatingNavBar(
-                    tabs = topTabs.map {
+                    tabs = topTabs.mapIndexed { idx, it ->
                         GlassNavTab(
                             id = it.id,
                             label = it.label,
                             selectedIcon = it.selectedIcon,
                             unselectedIcon = it.unselectedIcon,
-                            testTag = it.tag
+                            testTag = it.tag,
+                            isCenterHighlighted = idx == 2
                         )
                     },
                     selectedId = selectedTabId ?: "home",
