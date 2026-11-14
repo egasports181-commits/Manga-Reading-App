@@ -18,7 +18,10 @@ import com.example.extension.BuiltInRepositories
 import com.example.extension.ExtensionCompatibilityResolver
 import com.example.extension.ExtensionIndexParser
 import com.example.extension.ExtensionRepositoryManager
+import com.example.network.DnsMode
+import com.example.network.KomaDns
 import com.example.network.NetworkErrorFormatter
+import com.example.source.MangaDexSourceAdapter
 import com.example.source.SourceRegistry
 import com.example.ui.screens.reader.TapZoneAction
 import com.example.ui.screens.reader.resolveReaderTapAction
@@ -30,11 +33,18 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import java.io.ByteArrayOutputStream
+import java.io.IOException
 import java.net.ConnectException
+import java.net.InetAddress
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
+import java.security.cert.CertPathValidatorException
+import java.security.cert.CertificateException
+import java.security.cert.CertificateExpiredException
+import java.security.cert.CertificateNotYetValidException
 import java.util.zip.GZIPOutputStream
 import javax.net.ssl.SSLHandshakeException
+import javax.net.ssl.SSLPeerUnverifiedException
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36])
@@ -657,10 +667,117 @@ class KomaUpgradeRobolectricTest {
     }
 
     @Test
-    fun `network error formatter produces actionable diagnostics`() {
+    fun `network error formatter unwraps TLS cause chains accurately`() {
         assertTrue(NetworkErrorFormatter.describe(UnknownHostException("raw.githubusercontent.com")).contains("DNS"))
         assertTrue(NetworkErrorFormatter.describe(SSLHandshakeException("cert")).contains("TLS/SSL"))
         assertTrue(NetworkErrorFormatter.describe(SocketTimeoutException("timed out")).contains("timed out"))
         assertTrue(NetworkErrorFormatter.describe(ConnectException("refused")).contains("TCP"))
+
+        val expired = SSLHandshakeException("Chain validation failed").apply {
+            initCause(CertPathValidatorException("validity check failed", CertificateExpiredException("expired")))
+        }
+        val expiredMsg = NetworkErrorFormatter.describe(expired, "cdn.mangadex.network")
+        assertTrue(expiredMsg.contains("TLS/SSL"))
+        assertTrue(expiredMsg.contains("cdn.mangadex.network"))
+        assertTrue(expiredMsg.contains("expired", ignoreCase = true))
+
+        val notYetValid = IOException(
+            SSLHandshakeException("Handshake failed").apply {
+                initCause(CertificateNotYetValidException("not valid yet"))
+            }
+        )
+        val clockMsg = NetworkErrorFormatter.describe(notYetValid, "api.mangadex.org")
+        assertTrue(clockMsg.contains("TLS/SSL"))
+        assertTrue(clockMsg.contains("date/time"))
+
+        val trustAnchor = SSLHandshakeException("Handshake failed").apply {
+            initCause(CertPathValidatorException("Trust anchor for certification path not found."))
+        }
+        val caMsg = NetworkErrorFormatter.describe(trustAnchor, "uploads.mangadex.org")
+        assertTrue(caMsg.contains("TLS/SSL"))
+        assertTrue(caMsg.contains("untrusted certificate authority"))
+
+        val peerMismatch = SSLPeerUnverifiedException("Hostname api.mangadex.org not verified")
+        val mismatchMsg = NetworkErrorFormatter.describe(peerMismatch, "api.mangadex.org")
+        assertTrue(mismatchMsg.contains("TLS/SSL"))
+        assertTrue(mismatchMsg.contains("hostname verification"))
+        assertTrue(NetworkErrorFormatter.isTlsVerificationFailure(peerMismatch))
+    }
+
+    @Test
+    fun `koma dns filters spoofed bogons passes ip literals and escalates failed tls hosts to doh`() {
+        val publicIp = InetAddress.getByAddress("api.mangadex.org", byteArrayOf(104, 26, 2, 1))
+        val spoofedLoopback = InetAddress.getByAddress("api.mangadex.org", byteArrayOf(127, 0, 0, 1))
+        val spoofedPrivate = InetAddress.getByAddress("api.mangadex.org", byteArrayOf(10, 0, 0, 5))
+        val systemIp = InetAddress.getByAddress("api.mangadex.org", byteArrayOf(172.toByte(), 67, 1, 2))
+
+        var dohCalls = 0
+        val dns = KomaDns(
+            systemResolver = { host ->
+                if (host == "api.mangadex.org") listOf(spoofedLoopback, spoofedPrivate) else listOf(systemIp)
+            },
+            dohResolver = { _, _ ->
+                dohCalls++
+                listOf(publicIp)
+            }
+        )
+
+        // Bogon-only system DNS triggers DoH fallback
+        val resolved = dns.lookup("api.mangadex.org")
+        assertEquals(listOf(publicIp), resolved)
+        assertEquals(1, dohCalls)
+
+        // IP literal resolves directly without DoH
+        val dohBeforeLiteral = dohCalls
+        val ipLiteral = dns.lookup("1.1.1.1")
+        assertEquals(1, ipLiteral.size)
+        assertEquals("1.1.1.1", ipLiteral.first().hostAddress)
+        assertEquals(dohBeforeLiteral, dohCalls)
+
+        // Host marked after TLS failure switches to DoH first even if system returns a non-bogon IP
+        val cleanSystemFirst = KomaDns(
+            systemResolver = { listOf(systemIp) },
+            dohResolver = { _, _ ->
+                dohCalls++
+                listOf(publicIp)
+            }
+        )
+        assertEquals(listOf(systemIp), cleanSystemFirst.lookup("uploads.mangadex.org"))
+        cleanSystemFirst.markHostForDohPreferred("uploads.mangadex.org")
+        assertTrue(cleanSystemFirst.isHostDohPreferred("uploads.mangadex.org"))
+        assertEquals(listOf(publicIp), cleanSystemFirst.lookup("uploads.mangadex.org"))
+        cleanSystemFirst.mode = DnsMode.SYSTEM_DEFAULT
+        assertFalse(cleanSystemFirst.isHostDohPreferred("uploads.mangadex.org"))
+    }
+
+    @Test
+    fun `http client enforces strict tls verification and mangadex requests port 443`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val container = AppContainer(context)
+        val client = container.httpClient
+
+        // Must never allow cleartext in httpClient connectionSpecs
+        assertTrue(client.connectionSpecs.isNotEmpty())
+        assertTrue(client.connectionSpecs.all { it.isTls })
+
+        // Must keep strict X509TrustManager (rejects empty cert chain instead of trusting all)
+        val tm = client.x509TrustManager
+        assertNotNull(tm)
+        var rejected = false
+        try {
+            tm!!.checkServerTrusted(emptyArray(), "RSA")
+        } catch (_: CertificateException) {
+            rejected = true
+        } catch (_: IllegalArgumentException) {
+            rejected = true
+        }
+        assertTrue(rejected)
+
+        // MangaDex at-home endpoint must request forcePort443=true
+        val adapter = MangaDexSourceAdapter(client, container.database.sourcePreferenceDao())
+        assertEquals(
+            "https://api.mangadex.org/at-home/server/abc-123?forcePort443=true",
+            adapter.buildAtHomeRequestUrl("abc-123")
+        )
     }
 }

@@ -7,6 +7,7 @@ import com.example.network.NetworkErrorFormatter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -53,7 +54,7 @@ class MangaDexSourceAdapter(
             SourceHealthStatus(
                 isOnline = false,
                 latencyMs = (System.currentTimeMillis() - start).coerceAtLeast(1L),
-                errorReason = NetworkErrorFormatter.describe(e)
+                errorReason = NetworkErrorFormatter.describe(e, "api.mangadex.org")
             )
         }
     }
@@ -239,8 +240,13 @@ class MangaDexSourceAdapter(
     override suspend fun getChapterPages(chapterKey: String): List<SourcePage> = withContext(Dispatchers.IO) {
         val prefs = getPrefMap()
         val dataSaver = prefs["data_saver"] == "true"
-        val json = executeJson(buildAuthorizedRequest("$baseUrl/at-home/server/$chapterKey"))
-        val host = json.getString("baseUrl")
+        val atHomeUrl = buildAtHomeRequestUrl(chapterKey)
+        val json = executeJson(buildAuthorizedRequest(atHomeUrl))
+        val rawHost = json.getString("baseUrl").trim().trimEnd('/')
+        val parsedHost = rawHost.toHttpUrlOrNull()
+        if (parsedHost == null || !parsedHost.isHttps) {
+            throw IOException("MangaDex@Home returned an invalid or non-HTTPS image server URL: $rawHost")
+        }
         val chapterObj = json.getJSONObject("chapter")
         val hash = chapterObj.getString("hash")
         val qualityPath = if (dataSaver) "data-saver" else "data"
@@ -252,12 +258,15 @@ class MangaDexSourceAdapter(
                 add(
                     SourcePage(
                         index = i,
-                        imageUrl = "$host/$qualityPath/$hash/$fileName"
+                        imageUrl = "$rawHost/$qualityPath/$hash/$fileName"
                     )
                 )
             }
         }
     }
+
+    internal fun buildAtHomeRequestUrl(chapterKey: String): String =
+        "$baseUrl/at-home/server/$chapterKey?forcePort443=true"
 
     override suspend fun getPreferences(): List<SourcePreferenceItem> {
         val prefs = getPrefMap()
@@ -324,7 +333,7 @@ class MangaDexSourceAdapter(
                     }
                 }
             } catch (e: Exception) {
-                SourceSessionResult.Failed(e.message ?: "Network error during login")
+                SourceSessionResult.Failed(NetworkErrorFormatter.describe(e, "api.mangadex.org"))
             }
         }
 

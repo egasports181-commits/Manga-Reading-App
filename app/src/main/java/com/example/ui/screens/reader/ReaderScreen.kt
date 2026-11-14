@@ -42,6 +42,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
@@ -50,6 +51,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.SubcomposeAsyncImage
 import com.example.domain.model.*
+import com.example.network.NetworkErrorFormatter
 import com.example.ui.components.ErrorRetryBanner
 import com.example.ui.components.LiquidGlassFloatingPill
 import com.example.ui.components.LiquidGlassSurface
@@ -648,7 +650,13 @@ private fun RetryablePageImage(
                 CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(28.dp))
             }
         },
-        error = {
+        error = { errorState ->
+            val hostHint = remember(imageUrl) {
+                runCatching { java.net.URI(imageUrl).host }.getOrNull()
+            }
+            val reason = remember(errorState.result.throwable, hostHint) {
+                NetworkErrorFormatter.describe(errorState.result.throwable, hostHint)
+            }
             Column(
                 modifier = Modifier.fillMaxSize().heightIn(min = 240.dp).padding(24.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -657,6 +665,15 @@ private fun RetryablePageImage(
                 Icon(Icons.Default.BrokenImage, contentDescription = null, tint = Color.White.copy(alpha = 0.7f))
                 Spacer(Modifier.height(8.dp))
                 Text("Page failed to load", style = MaterialTheme.typography.bodySmall, color = Color.White)
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = reason,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color.White.copy(alpha = 0.75f),
+                    textAlign = TextAlign.Center,
+                    maxLines = 4,
+                    overflow = TextOverflow.Ellipsis
+                )
                 Spacer(Modifier.height(8.dp))
                 FilledTonalButton(onClick = { retryNonce++ }) {
                     Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))

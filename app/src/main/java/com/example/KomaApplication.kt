@@ -12,6 +12,7 @@ import com.example.data.preferences.AppPreferencesRepository
 import com.example.data.repository.*
 import com.example.extension.ExtensionSessionManager
 import com.example.network.KomaDns
+import com.example.network.KomaNetworkEventListener
 import com.example.network.KomaNetworkInterceptor
 import com.example.network.NetworkDiagnosticsTracker
 import com.example.source.SourceRegistry
@@ -38,11 +39,13 @@ class AppContainer(context: Context) {
     val networkDiagnostics = NetworkDiagnosticsTracker(appContext)
     val komaDns = KomaDns(networkDiagnostics)
     val sessionManager = ExtensionSessionManager(database.extensionDao())
-    val networkInterceptor = KomaNetworkInterceptor(networkDiagnostics)
+    val networkEventListener = KomaNetworkEventListener(networkDiagnostics, komaDns)
+    val networkInterceptor = KomaNetworkInterceptor(networkDiagnostics, komaDns, networkEventListener)
 
     val httpClient: OkHttpClient = OkHttpClient.Builder()
         .dns(komaDns)
         .cookieJar(sessionManager.cookieJar)
+        .eventListenerFactory { networkEventListener }
         .addInterceptor(networkInterceptor)
         .connectionSpecs(listOf(ConnectionSpec.MODERN_TLS, ConnectionSpec.COMPATIBLE_TLS))
         .followRedirects(true)

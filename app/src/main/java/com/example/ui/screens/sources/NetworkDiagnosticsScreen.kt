@@ -37,6 +37,7 @@ private data class EndpointProbeResult(
     val success: Boolean,
     val httpCode: Int? = null,
     val latencyMs: Long = 0L,
+    val tlsInfo: String? = null,
     val error: String? = null
 )
 
@@ -63,6 +64,7 @@ fun NetworkDiagnosticsScreen(
             health = container.networkDiagnostics.inspectConnectivity()
             val targets = listOf(
                 "MangaDex API" to "https://api.mangadex.org/ping",
+                "MangaDex Covers CDN" to "https://uploads.mangadex.org",
                 "Raw GitHub (Extensions)" to "https://raw.githubusercontent.com/keiyoushi/extensions/repo/repo.json",
                 "Cloudflare DoH" to "https://1.1.1.1/dns-query?name=api.mangadex.org&type=A"
             )
@@ -76,22 +78,28 @@ fun NetworkDiagnosticsScreen(
                             .get()
                             .build()
                         container.httpClient.newCall(req).execute().use { resp ->
+                            val tlsSummary = resp.handshake?.let {
+                                "${it.tlsVersion.javaName} • ${it.cipherSuite.javaName}"
+                            }
+                            val isReachable = resp.isSuccessful || (url.contains("uploads.mangadex.org") && resp.code < 500)
                             EndpointProbeResult(
                                 label = label,
                                 url = url,
-                                success = resp.isSuccessful,
+                                success = isReachable,
                                 httpCode = resp.code,
                                 latencyMs = (System.currentTimeMillis() - start).coerceAtLeast(1L),
-                                error = if (resp.isSuccessful) null else "HTTP ${resp.code}"
+                                tlsInfo = tlsSummary,
+                                error = if (isReachable) null else "HTTP ${resp.code}"
                             )
                         }
                     } catch (e: Exception) {
+                        val hostHint = runCatching { java.net.URI(url).host }.getOrNull()
                         EndpointProbeResult(
                             label = label,
                             url = url,
                             success = false,
                             latencyMs = (System.currentTimeMillis() - start).coerceAtLeast(1L),
-                            error = NetworkErrorFormatter.describe(e)
+                            error = NetworkErrorFormatter.describe(e, hostHint)
                         )
                     }
                 }
@@ -227,6 +235,14 @@ fun NetworkDiagnosticsScreen(
                                     fontWeight = FontWeight.SemiBold
                                 )
                             }
+                            probe.tlsInfo?.let {
+                                Text(
+                                    text = it,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontFamily = FontFamily.Monospace,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                             probe.error?.let {
                                 Text(it, style = MaterialTheme.typography.bodySmall, color = StatusError)
                             }
@@ -325,6 +341,16 @@ fun NetworkDiagnosticsScreen(
                                     text = "${entry.statusCode ?: "ERR"} • ${entry.durationMs}ms",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = if (ok) StatusOngoing else StatusError
+                                )
+                            }
+                            if (!entry.tlsInfo.isNullOrBlank() || !entry.resolvedIp.isNullOrBlank()) {
+                                Text(
+                                    text = listOfNotNull(entry.resolvedIp, entry.tlsInfo).joinToString(" • "),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontFamily = FontFamily.Monospace,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                             }
                             Text(

@@ -12,6 +12,7 @@ import com.example.data.repository.MangaRepository
 import com.example.data.repository.TrackingRepository
 import com.example.domain.model.RemoteTrackerSearchResult
 import com.example.domain.model.TrackerService
+import com.example.network.NetworkErrorFormatter
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
@@ -98,7 +99,10 @@ class MangaDetailViewModel(
             val res = mangaRepo.refreshMangaAndChapters(mangaId)
             localState.update {
                 if (res.isSuccess) it.copy(isRefreshing = false)
-                else it.copy(isRefreshing = false, error = res.exceptionOrNull()?.message ?: "Refresh failed")
+                else it.copy(
+                    isRefreshing = false,
+                    error = NetworkErrorFormatter.describe(res.exceptionOrNull())
+                )
             }
         }
     }
@@ -174,7 +178,7 @@ class MangaDetailViewModel(
             val res = trackingRepo.searchRemote(service, query)
             localState.update {
                 if (res.isSuccess) it.copy(trackerResults = res.getOrDefault(emptyList()))
-                else it.copy(trackerError = res.exceptionOrNull()?.message)
+                else it.copy(trackerError = NetworkErrorFormatter.describe(res.exceptionOrNull()))
             }
         }
     }
