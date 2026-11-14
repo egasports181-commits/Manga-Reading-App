@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "Koma"
+rootProject.name = "Kiyomi"
 
 include(":app")

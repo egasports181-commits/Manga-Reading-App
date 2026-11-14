@@ -96,6 +96,30 @@ class ExtensionRepositoryManager(
         return raw.trim().trimEnd('/')
     }
 
+    fun canonicalUrlKey(raw: String): String {
+        val norm = normalizeUrl(raw)
+        val parsed = norm.toHttpUrlOrNull() ?: return norm.lowercase()
+        val host = parsed.host.lowercase()
+        val segments = parsed.pathSegments.filter { it.isNotBlank() }
+        // Canonicalize GitHub raw aliases:
+        // - https://github.com/<owner>/<repo>/raw/<branch>/<path...>
+        // - https://raw.githubusercontent.com/<owner>/<repo>/refs/heads/<branch>/<path...>
+        // - https://raw.githubusercontent.com/<owner>/<repo>/<branch>/<path...>
+        if (host == "github.com" && segments.size >= 4 && segments[2].equals("raw", ignoreCase = true)) {
+            val owner = segments[0].lowercase()
+            val repo = segments[1].lowercase()
+            val tail = segments.drop(3).joinToString("/").removePrefix("refs/heads/")
+            return "https://raw.githubusercontent.com/$owner/$repo/$tail".lowercase()
+        }
+        if (host == "raw.githubusercontent.com" && segments.size >= 3) {
+            val owner = segments[0].lowercase()
+            val repo = segments[1].lowercase()
+            val rest = segments.drop(2).joinToString("/").removePrefix("refs/heads/")
+            return "https://raw.githubusercontent.com/$owner/$repo/$rest".lowercase()
+        }
+        return "${parsed.scheme.lowercase()}://$host/${segments.joinToString("/")}".lowercase()
+    }
+
     /**
      * Seeds the 8 default built-in repositories without duplicates.
      * When [forceRestore] is false, seeds only if no built-in repositories currently exist
@@ -106,11 +130,12 @@ class ExtensionRepositoryManager(
         if (!forceRestore && existing.any { it.isBuiltIn }) {
             return@withContext 0
         }
-        val existingNormalized = existing.map { normalizeUrl(it.indexUrl) }.toMutableSet()
+        val existingNormalized = existing.map { canonicalUrlKey(it.indexUrl) }.toMutableSet()
         var inserted = 0
         for (spec in BuiltInRepositories.ALL) {
             val normalized = normalizeUrl(spec.indexUrl)
-            if (normalized !in existingNormalized) {
+            val key = canonicalUrlKey(spec.indexUrl)
+            if (key !in existingNormalized) {
                 val format = if (normalized.endsWith(".pb")) "index.pb" else "index.min.json"
                 extensionDao.upsertRepo(
                     ExtensionRepoEntity(
@@ -144,8 +169,9 @@ class ExtensionRepositoryManager(
             )
         }
 
+        val canonicalNew = canonicalUrlKey(trimmed)
         val existing = extensionDao.getReposOnce().firstOrNull {
-            normalizeUrl(it.indexUrl).equals(trimmed, ignoreCase = true)
+            canonicalUrlKey(it.indexUrl) == canonicalNew
         }
         if (existing != null) {
             return@withContext Result.failure(
@@ -366,12 +392,13 @@ class ExtensionRepositoryManager(
     suspend fun importRepositoriesJson(rawJson: String): Result<Int> = withContext(Dispatchers.IO) {
         runCatching {
             val bundle = json.decodeFromString<RepoExportBundle>(rawJson.trim())
-            val existing = extensionDao.getReposOnce().map { normalizeUrl(it.indexUrl) }.toMutableSet()
+            val existing = extensionDao.getReposOnce().map { canonicalUrlKey(it.indexUrl) }.toMutableSet()
             var imported = 0
             for (item in bundle.repositories) {
                 val url = normalizeUrl(item.indexUrl)
+                val key = canonicalUrlKey(url)
                 val parsed = url.toHttpUrlOrNull() ?: continue
-                if (!parsed.isHttps || url in existing) continue
+                if (!parsed.isHttps || key in existing) continue
                 extensionDao.upsertRepo(
                     ExtensionRepoEntity(
                         name = item.name.ifBlank { parsed.host },
@@ -383,7 +410,7 @@ class ExtensionRepositoryManager(
                         repoFormat = if (url.endsWith(".pb")) "index.pb" else "index.min.json"
                     )
                 )
-                existing.add(url)
+                existing.add(key)
                 imported++
             }
             imported

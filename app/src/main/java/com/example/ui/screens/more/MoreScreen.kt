@@ -110,14 +110,14 @@ fun MoreScreen(
                                 ) {
                                     Image(
                                         painter = painterResource(id = R.drawable.ic_koma_logo),
-                                        contentDescription = "Koma logo",
+                                        contentDescription = "Kiyomi logo",
                                         contentScale = ContentScale.Crop,
                                         modifier = Modifier.fillMaxSize()
                                     )
                                 }
                                 Column {
                                     Text(
-                                        text = "Koma Reader",
+                                        text = "Kiyomi Reader",
                                         style = MaterialTheme.typography.titleMedium,
                                         fontWeight = FontWeight.Bold
                                     )
@@ -319,13 +319,13 @@ fun MoreScreen(
         AlertDialog(
             onDismissRequest = { showPrivacyDialog = false },
             shape = RoundedCornerShape(24.dp),
-            title = { Text("Koma Privacy & Security") },
+            title = { Text("Kiyomi Privacy & Security") },
             text = {
                 Text(
                     "• Local-First Storage: Your library, reading history, categories, and preferences stay in on-device Room & DataStore storage.\n\n" +
-                        "• Untrusted Extensions Protection: Koma validates HTTPS repository URLs and SHA-256 digests, never silently installs APKs, and never executes arbitrary remote JavaScript.\n\n" +
-                        "• Zero Telemetry: Koma collects no analytics or usage tracking. Network calls occur only to sources or trackers you explicitly use.\n\n" +
-                        "• Authorized Content Only: Koma never circumvents paywalls, DRM, or authentication protections.",
+                        "• Extension Signature & Trust Verification: Kiyomi validates HTTPS repository URLs, verifies APK v1/v2/v3 signatures with apksig, enforces signer trust & explicit OS installation consent, and isolates source preferences.\n\n" +
+                        "• Zero Telemetry: Kiyomi collects no analytics or usage tracking. Network calls occur only to sources or trackers you explicitly use.\n\n" +
+                        "• Authorized Content Only: Kiyomi never circumvents paywalls, DRM, or authentication protections.",
                     style = MaterialTheme.typography.bodySmall
                 )
             },

@@ -26,7 +26,7 @@ class DeclarativeJsonSourceAdapter(
     private val httpClient: OkHttpClient
 ) : MangaSourceAdapter {
 
-    override val category: String = "Koma Extension"
+    override val category: String = "Kiyomi Extension"
     override val baseUrl: String = descriptor.optString("baseUrl", "").trim()
     override val supportsFilters: Boolean = descriptor.optString("searchEndpoint", "").contains("{lang}")
     override val supportsLogin: Boolean = false
@@ -218,7 +218,7 @@ class DeclarativeJsonSourceAdapter(
             baseUrl.trimEnd('/') + "/" + trimmed.trimStart('/')
         }
         require(full.startsWith("https://")) {
-            "Only HTTPS endpoints are permitted for Koma Declarative Extensions."
+            "Only HTTPS endpoints are permitted for Kiyomi Declarative Extensions."
         }
         return full
     }

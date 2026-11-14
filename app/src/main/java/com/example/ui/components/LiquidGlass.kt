@@ -224,7 +224,7 @@ fun LiquidGlassTopBar(
                         ) {
                             Image(
                                 painter = painterResource(id = R.drawable.ic_koma_logo),
-                                contentDescription = "Koma logo",
+                                contentDescription = "Kiyomi logo",
                                 contentScale = ContentScale.Crop,
                                 modifier = Modifier.fillMaxSize()
                             )

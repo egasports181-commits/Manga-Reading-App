@@ -506,7 +506,7 @@ class KomaDns(
     }
 
     companion object {
-        const val USER_AGENT = "KomaMangaReader/2.0 (Android; Mobile)"
+        const val USER_AGENT = "KiyomiMangaReader/2.0 (Android; Mobile)"
         private val IPV4_REGEX = Regex("^(\\d{1,3}\\.){3}\\d{1,3}$")
 
         fun isIpLiteral(host: String): Boolean {

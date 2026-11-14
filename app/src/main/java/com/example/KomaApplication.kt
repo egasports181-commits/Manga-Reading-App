@@ -10,7 +10,12 @@ import coil.memory.MemoryCache
 import com.example.data.local.db.KomaDatabase
 import com.example.data.preferences.AppPreferencesRepository
 import com.example.data.repository.*
+import com.example.extension.ExtensionInstallEvent
+import com.example.extension.ExtensionInstaller
 import com.example.extension.ExtensionSessionManager
+import com.example.extension.ExtensionTrustManager
+import com.example.extension.MihonExtensionLoader
+import com.example.extension.MihonRuntimeInitializer
 import com.example.network.KomaDns
 import com.example.network.KomaNetworkEventListener
 import com.example.network.KomaNetworkInterceptor
@@ -82,18 +87,30 @@ class AppContainer(context: Context) {
         .crossfade(true)
         .build()
 
+    val extensionTrustManager = ExtensionTrustManager(appContext)
+    val extensionInstaller = ExtensionInstaller(appContext)
+    val mihonExtensionLoader = MihonExtensionLoader(
+        context = appContext,
+        httpClient = httpClient,
+        trustManager = extensionTrustManager
+    )
+
     val sourceRegistry: SourceRegistry = SourceRegistry(
         context = appContext,
         httpClient = httpClient,
         prefsRepo = preferences,
         extensionDao = database.extensionDao(),
-        sourcePrefDao = database.sourcePreferenceDao()
+        sourcePrefDao = database.sourcePreferenceDao(),
+        mihonLoader = mihonExtensionLoader
     )
 
     val extensionRepository: ExtensionRepository = ExtensionRepository(
         extensionDao = database.extensionDao(),
         httpClient = httpClient,
-        context = appContext
+        context = appContext,
+        trustManager = extensionTrustManager,
+        installer = extensionInstaller,
+        mihonLoader = mihonExtensionLoader
     )
 
     val mangaRepository: MangaRepository = MangaRepository(
@@ -131,9 +148,19 @@ class AppContainer(context: Context) {
     )
 
     init {
+        MihonRuntimeInitializer.ensureInitialized(appContext, httpClient)
+        extensionInstaller.registerReceivers()
         appScope.launch {
             sessionManager.preloadCookies()
             extensionRepository.seedDefaultRepositoriesIfMissing(forceRestore = false)
+            extensionRepository.syncInstalledExtensions()
+        }
+        appScope.launch {
+            extensionInstaller.events.collect { event ->
+                if (event is ExtensionInstallEvent.PackageChanged || event is ExtensionInstallEvent.Succeeded) {
+                    extensionRepository.syncInstalledExtensions()
+                }
+            }
         }
         appScope.launch {
             preferences.preferences.collect { prefs ->

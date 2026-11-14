@@ -73,6 +73,11 @@ fun SourcesScreen(
     var inspectPackage by remember { mutableStateOf<ExtensionPackageEntity?>(null) }
 
     val context = LocalContext.current
+    LaunchedEffect(viewModel) {
+        viewModel.osActionIntents.collect { intent ->
+            runCatching { context.startActivity(intent) }
+        }
+    }
     val safFolderLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocumentTree()
     ) { uri ->
@@ -261,6 +266,7 @@ fun SourcesScreen(
                     onRefreshAllRepos = { viewModel.refreshAllEnabledRepos(false) },
                     onRetryFailedRepos = { viewModel.refreshAllEnabledRepos(true) },
                     onRestoreBuiltIns = viewModel::restoreBuiltInRepos,
+                    onReloadInstalled = { viewModel.syncCompanionApps(showFeedback = true) },
                     onExportRepos = viewModel::exportRepositories,
                     onImportRepos = { showImportRepoDialog = true },
                     onOpenDiagnostics = onOpenDiagnostics,
@@ -269,6 +275,8 @@ fun SourcesScreen(
                     onTrustRepo = viewModel::trustRepository,
                     onRemoveRepo = viewModel::removeRepository,
                     onInstallOrUpdate = viewModel::installOrUpdateExtension,
+                    onTrustSigner = viewModel::trustExtensionSigner,
+                    onInstallApk = viewModel::requestOsInstallMihonApk,
                     onUpdateAll = viewModel::updateAllExtensions,
                     onToggleEnabled = viewModel::setExtensionEnabled,
                     onUninstall = viewModel::uninstallExtension,
@@ -304,7 +312,7 @@ fun SourcesScreen(
             json = json,
             onCopy = {
                 val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                cm.setPrimaryClip(ClipData.newPlainText("Koma Repositories", json))
+                cm.setPrimaryClip(ClipData.newPlainText("Kiyomi Repositories", json))
                 viewModel.dismissExportJson()
             },
             onDismiss = viewModel::dismissExportJson
@@ -329,6 +337,14 @@ fun SourcesScreen(
             onDismiss = { inspectPackage = null },
             onInstallOrVerify = {
                 viewModel.installOrUpdateExtension(pkg)
+                inspectPackage = null
+            },
+            onTrustSigner = {
+                viewModel.trustExtensionSigner(pkg)
+                inspectPackage = null
+            },
+            onInstallApk = {
+                viewModel.requestOsInstallMihonApk(pkg)
                 inspectPackage = null
             },
             onOpenNativeSource = { nativeSourceId ->
@@ -566,7 +582,7 @@ private fun SourcesDirectoryTab(
                                 shape = CircleShape
                             ) {
                                 Text(
-                                    text = if (desc.canExecuteInKoma) "Executable" else "APK Verified • Restricted",
+                                    text = if (desc.canExecuteInKoma) "Compatible" else "Action Needed",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = StatusHiatus,
                                     fontWeight = FontWeight.Medium,
@@ -847,6 +863,7 @@ private fun ExtensionsManagerTab(
     onRefreshAllRepos: () -> Unit,
     onRetryFailedRepos: () -> Unit,
     onRestoreBuiltIns: () -> Unit,
+    onReloadInstalled: () -> Unit,
     onExportRepos: () -> Unit,
     onImportRepos: () -> Unit,
     onOpenDiagnostics: () -> Unit,
@@ -855,6 +872,8 @@ private fun ExtensionsManagerTab(
     onTrustRepo: (ExtensionRepoEntity, Boolean) -> Unit,
     onRemoveRepo: (ExtensionRepoEntity) -> Unit,
     onInstallOrUpdate: (ExtensionPackageEntity) -> Unit,
+    onTrustSigner: (ExtensionPackageEntity) -> Unit,
+    onInstallApk: (ExtensionPackageEntity) -> Unit,
     onUpdateAll: () -> Unit,
     onToggleEnabled: (String, Boolean) -> Unit,
     onUninstall: (String) -> Unit,
@@ -910,12 +929,12 @@ private fun ExtensionsManagerTab(
                 ) {
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Text(
-                            "Mihon & Koma Extension Repositories",
+                            "Mihon & Kiyomi Extension Repositories",
                             style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            "Supports HTTPS Mihon `index.pb` (Protobuf), `index.min.json`, companion `repo.json`, and Koma declarative JSON adapters. Built-in defaults stay seeded and independently syncable.",
+                            "Supports HTTPS Mihon `index.pb` (Protobuf v1/v2), `index.min.json`, companion `repo.json`, and Kiyomi declarative JSON adapters with `apksig` verification and OS-consented installation.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -932,6 +951,9 @@ private fun ExtensionsManagerTab(
                                 FilledTonalButton(onClick = onRetryFailedRepos, shape = CircleShape) {
                                     Text("Retry Failed ($failedRepoCount)")
                                 }
+                            }
+                            FilledTonalButton(onClick = onReloadInstalled, shape = CircleShape) {
+                                Text("Reload Installed")
                             }
                             OutlinedButton(onClick = onAddRepo, shape = CircleShape) { Text("Add URL") }
                             OutlinedButton(onClick = onRestoreBuiltIns, shape = CircleShape) { Text("Restore Defaults") }
@@ -1292,32 +1314,27 @@ private fun ExtensionsManagerTab(
                                 val badgeColor = when (lifecycle.primaryState) {
                                     ExtensionLifecycleState.ACTIVE -> StatusOngoing
                                     ExtensionLifecycleState.COMPATIBLE -> StatusCompleted
-                                    ExtensionLifecycleState.VERIFIED,
+                                    ExtensionLifecycleState.VERIFIED -> StatusCompleted
                                     ExtensionLifecycleState.DOWNLOADED -> StatusHiatus
-                                    ExtensionLifecycleState.UNSUPPORTED -> when {
-                                        lifecycle.nativeEquivalentSourceId != null -> StatusCompleted
-                                        pkg.compatibilityStatus == ExtensionCompatibilityStatus.VERIFIED_MIHON_RUNTIME_RESTRICTED.name -> StatusHiatus
+                                    ExtensionLifecycleState.UNSUPPORTED -> when (pkg.compatibilityStatus) {
+                                        ExtensionCompatibilityStatus.UNTRUSTED_SIGNER.name,
+                                        ExtensionCompatibilityStatus.UNTRUSTED_REPO.name -> StatusHiatus
                                         else -> StatusError
                                     }
                                 }
-                                val badgeLabel = when (lifecycle.primaryState) {
-                                    ExtensionLifecycleState.ACTIVE -> if (isIpc) "Active IPC" else "Active"
-                                    ExtensionLifecycleState.COMPATIBLE -> if (isIpc) "IPC Ready" else "Compatible"
-                                    ExtensionLifecycleState.VERIFIED -> if (lifecycle.nativeEquivalentSourceId != null) {
-                                        "Verified • Native Alt"
-                                    } else {
-                                        "Cat C • Verified APK"
-                                    }
-                                    ExtensionLifecycleState.DOWNLOADED -> "Inspected"
-                                    ExtensionLifecycleState.UNSUPPORTED -> when (pkg.compatibilityStatus) {
-                                        ExtensionCompatibilityStatus.MALFORMED_APK.name -> "Cat B: Malformed APK"
-                                        ExtensionCompatibilityStatus.SIGNATURE_MISMATCH.name -> "Cat B: Sig Mismatch"
-                                        ExtensionCompatibilityStatus.LIB_VERSION_INCOMPATIBLE.name -> "Cat A: API Mismatch"
-                                        ExtensionCompatibilityStatus.DIFFERENT_ARCHITECTURE.name -> "Cat D: Non-Mihon APK"
-                                        ExtensionCompatibilityStatus.UNTRUSTED_REPO.name -> "Untrusted Repo"
-                                        ExtensionCompatibilityStatus.NATIVE_EQUIVALENT_AVAILABLE.name -> "Cat C + Native Alt"
-                                        else -> "Cat C: Mihon DEX"
-                                    }
+                                val badgeLabel = when {
+                                    lifecycle.primaryState == ExtensionLifecycleState.ACTIVE -> if (isIpc) "Active IPC" else "Active"
+                                    pkg.compatibilityStatus == ExtensionCompatibilityStatus.VERIFIED_MIHON_READY.name -> "Verified APK"
+                                    pkg.compatibilityStatus == ExtensionCompatibilityStatus.UNTRUSTED_SIGNER.name -> "Trust Required"
+                                    pkg.compatibilityStatus == ExtensionCompatibilityStatus.UNSIGNED_APK.name -> "Unsigned APK"
+                                    pkg.compatibilityStatus == ExtensionCompatibilityStatus.MALFORMED_APK.name -> "Invalid APK"
+                                    pkg.compatibilityStatus == ExtensionCompatibilityStatus.SIGNATURE_MISMATCH.name -> "Sig Mismatch"
+                                    pkg.compatibilityStatus == ExtensionCompatibilityStatus.LIB_VERSION_INCOMPATIBLE.name -> "API Mismatch"
+                                    pkg.compatibilityStatus == ExtensionCompatibilityStatus.DIFFERENT_ARCHITECTURE.name -> "Non-Mihon APK"
+                                    pkg.compatibilityStatus == ExtensionCompatibilityStatus.MIHON_LOAD_FAILED.name -> "Load Error"
+                                    pkg.compatibilityStatus == ExtensionCompatibilityStatus.UNTRUSTED_REPO.name -> "Untrusted Repo"
+                                    lifecycle.primaryState == ExtensionLifecycleState.COMPATIBLE -> if (isIpc) "IPC Ready" else "Compatible"
+                                    else -> "Mihon Extension"
                                 }
                                 Surface(
                                     color = badgeColor.copy(alpha = 0.14f),
@@ -1359,7 +1376,7 @@ private fun ExtensionsManagerTab(
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                if (pkg.isInstalled && lifecycle.isCompatible) {
+                                if (pkg.isInstalled && pkg.compatibilityStatus != ExtensionCompatibilityStatus.UNTRUSTED_SIGNER.name) {
                                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                         Switch(
                                             checked = pkg.isEnabled,
@@ -1392,6 +1409,20 @@ private fun ExtensionsManagerTab(
                                             Button(onClick = { onInstallOrUpdate(pkg) }, shape = CircleShape) {
                                                 Text("Activate IPC")
                                             }
+                                        } else if (pkg.compatibilityStatus == ExtensionCompatibilityStatus.UNTRUSTED_SIGNER.name) {
+                                            Button(onClick = { onTrustSigner(pkg) }, shape = CircleShape) {
+                                                Text("Trust Signer")
+                                            }
+                                            OutlinedButton(onClick = { onUninstall(pkg.pkgId) }, shape = CircleShape) {
+                                                Text("Remove")
+                                            }
+                                        } else if (pkg.compatibilityStatus == ExtensionCompatibilityStatus.VERIFIED_MIHON_READY.name) {
+                                            Button(onClick = { onInstallApk(pkg) }, shape = CircleShape) {
+                                                Text("Install APK")
+                                            }
+                                            OutlinedButton(onClick = { onUninstall(pkg.pkgId) }, shape = CircleShape) {
+                                                Text("Remove")
+                                            }
                                         } else if (isApkVerified) {
                                             if (nativeEqId != null) {
                                                 Button(onClick = { onOpenNativeSource(nativeEqId) }, shape = CircleShape) {
@@ -1407,8 +1438,8 @@ private fun ExtensionsManagerTab(
                                             }
                                         } else if (!isKoma) {
                                             if (nativeEqId != null) {
-                                                Button(onClick = { onOpenNativeSource(nativeEqId) }, shape = CircleShape) {
-                                                    Text("Open Native")
+                                                OutlinedButton(onClick = { onOpenNativeSource(nativeEqId) }, shape = CircleShape) {
+                                                    Text("Native")
                                                 }
                                             }
                                             FilledTonalButton(
@@ -1416,7 +1447,7 @@ private fun ExtensionsManagerTab(
                                                 enabled = pkg.apkUrl.startsWith("https://") && downloadFraction == null,
                                                 shape = CircleShape
                                             ) {
-                                                Text("Inspect APK")
+                                                Text("Download & Verify")
                                             }
                                         }
                                     }
@@ -1505,7 +1536,7 @@ private fun ImportRepositoryDialog(
         title = { Text("Import Repository JSON") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Paste a previously exported Koma repository JSON bundle.", style = MaterialTheme.typography.bodySmall)
+                Text("Paste a previously exported Kiyomi repository JSON bundle.", style = MaterialTheme.typography.bodySmall)
                 OutlinedTextField(
                     value = raw,
                     onValueChange = { raw = it },
@@ -1560,6 +1591,8 @@ private fun ExtensionInspectDialog(
     pkg: ExtensionPackageEntity,
     onDismiss: () -> Unit,
     onInstallOrVerify: () -> Unit,
+    onTrustSigner: () -> Unit,
+    onInstallApk: () -> Unit,
     onOpenNativeSource: (String) -> Unit,
     onOpenApkInBrowser: (String) -> Unit
 ) {
@@ -1633,7 +1666,7 @@ private fun ExtensionInspectDialog(
                     Text(pkg.compatibilityReason, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 if (pkg.installedSignatureSha256.isNotBlank()) {
-                    Text("APK Cert SHA-256: ${pkg.installedSignatureSha256.take(24)}…", style = MaterialTheme.typography.labelSmall)
+                    Text("Signer Cert SHA-256: ${pkg.installedSignatureSha256}", style = MaterialTheme.typography.labelSmall)
                 }
                 lifecycle.nativeEquivalentSourceId?.let { nativeId ->
                     FilledTonalButton(
@@ -1663,8 +1696,12 @@ private fun ExtensionInspectDialog(
                 Button(onClick = onInstallOrVerify, shape = CircleShape) { Text("Activate IPC") }
             } else if (isKoma && lifecycle.isCompatible && !pkg.isInstalled) {
                 Button(onClick = onInstallOrVerify, shape = CircleShape) { Text("Install") }
+            } else if (pkg.compatibilityStatus == ExtensionCompatibilityStatus.UNTRUSTED_SIGNER.name) {
+                Button(onClick = onTrustSigner, shape = CircleShape) { Text("Trust Signer") }
+            } else if (pkg.compatibilityStatus == ExtensionCompatibilityStatus.VERIFIED_MIHON_READY.name) {
+                Button(onClick = onInstallApk, shape = CircleShape) { Text("Install APK") }
             } else if (!isKoma && !isIpc && pkg.apkUrl.startsWith("https://")) {
-                FilledTonalButton(onClick = onInstallOrVerify, shape = CircleShape) { Text("Download & Inspect APK") }
+                FilledTonalButton(onClick = onInstallOrVerify, shape = CircleShape) { Text("Download & Verify APK") }
             }
         },
         dismissButton = {

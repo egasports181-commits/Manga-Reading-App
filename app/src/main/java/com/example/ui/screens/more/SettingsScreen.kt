@@ -329,7 +329,7 @@ fun SettingsScreen(
             item {
                 KomaElevatedCard(shape = RoundedCornerShape(20.dp)) {
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        SettingsSwitch("Auto-Update Trusted Koma Extensions", prefs.autoUpdateExtensions, viewModel::setAutoUpdateExtensions)
+                        SettingsSwitch("Auto-Update Trusted Kiyomi Extensions", prefs.autoUpdateExtensions, viewModel::setAutoUpdateExtensions)
                         SettingsSwitch("Incognito Reading Mode", prefs.incognitoMode, viewModel::setIncognitoMode)
                     }
                 }

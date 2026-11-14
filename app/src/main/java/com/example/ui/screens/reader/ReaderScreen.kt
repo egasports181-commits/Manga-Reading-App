@@ -54,8 +54,10 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.SubcomposeAsyncImage
+import coil.request.ImageRequest
 import com.example.domain.model.*
 import com.example.network.NetworkErrorFormatter
+import okhttp3.Headers.Companion.toHeaders
 import com.example.ui.components.ErrorRetryBanner
 import com.example.ui.components.KomaCircularGlassButton
 import com.example.ui.components.KomaElevatedCard
@@ -295,6 +297,7 @@ fun ReaderScreen(
                             itemsIndexed(pages, key = { _, p -> p.index }) { _, page ->
                                 RetryablePageImage(
                                     imageUrl = page.imageUrl,
+                                    headers = page.headers,
                                     contentDescription = "Page ${page.index + 1}",
                                     contentScale = ContentScale.FillWidth,
                                     modifier = Modifier
@@ -339,6 +342,7 @@ fun ReaderScreen(
                             }
                             ReaderPageSurface(
                                 imageUrl = pages[idx].imageUrl,
+                                headers = pages[idx].headers,
                                 pageIndex = idx,
                                 contentScale = contentScale,
                                 baseScale = if (state.scaleMode == ImageScaleMode.CUSTOM) state.customZoom else 1f,
@@ -379,6 +383,7 @@ fun ReaderScreen(
                                 pair.reversed().forEach { p ->
                                     RetryablePageImage(
                                         imageUrl = p.imageUrl,
+                                        headers = p.headers,
                                         contentDescription = "Page ${p.index + 1}",
                                         contentScale = ContentScale.Fit,
                                         modifier = Modifier
@@ -423,6 +428,7 @@ fun ReaderScreen(
                             }
                             ReaderPageSurface(
                                 imageUrl = pages[idx].imageUrl,
+                                headers = pages[idx].headers,
                                 pageIndex = idx,
                                 contentScale = contentScale,
                                 baseScale = if (state.scaleMode == ImageScaleMode.CUSTOM) state.customZoom else 1f,
@@ -748,11 +754,25 @@ private fun RetryablePageImage(
     imageUrl: String,
     contentDescription: String,
     contentScale: ContentScale,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    headers: Map<String, String> = emptyMap()
 ) {
+    val context = LocalContext.current
     var retryNonce by remember(imageUrl) { mutableIntStateOf(0) }
-    val requestModel = remember(imageUrl, retryNonce) {
-        if (retryNonce == 0) imageUrl else "$imageUrl${if ('?' in imageUrl) '&' else '?'}komaRetry=$retryNonce"
+    val requestModel = remember(imageUrl, headers, retryNonce, context) {
+        val url = if (retryNonce == 0) {
+            imageUrl
+        } else {
+            "$imageUrl${if ('?' in imageUrl) '&' else '?'}kiyomiRetry=$retryNonce"
+        }
+        ImageRequest.Builder(context)
+            .data(url)
+            .apply {
+                if (headers.isNotEmpty()) {
+                    headers(headers.toHeaders())
+                }
+            }
+            .build()
     }
     SubcomposeAsyncImage(
         model = requestModel,
@@ -839,7 +859,8 @@ private fun ReaderPageSurface(
     isRtl: Boolean,
     onPrev: () -> Unit,
     onNext: () -> Unit,
-    onToggleHud: () -> Unit
+    onToggleHud: () -> Unit,
+    headers: Map<String, String> = emptyMap()
 ) {
     var scale by remember(imageUrl, baseScale) { mutableFloatStateOf(baseScale) }
     var offsetX by remember(imageUrl) { mutableFloatStateOf(0f) }
@@ -887,6 +908,7 @@ private fun ReaderPageSurface(
     ) {
         RetryablePageImage(
             imageUrl = imageUrl,
+            headers = headers,
             contentDescription = "Manga page ${pageIndex + 1}",
             contentScale = contentScale,
             modifier = Modifier

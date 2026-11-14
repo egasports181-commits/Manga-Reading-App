@@ -19,6 +19,7 @@ import com.example.network.NetworkErrorFormatter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
+import okhttp3.Headers.Companion.toHeaders
 import okhttp3.Request
 import java.io.File
 import java.io.FileOutputStream
@@ -79,7 +80,15 @@ class ChapterDownloadWorker(
                     if (tmpFile.exists()) tmpFile.delete()
                     try {
                         if (page.imageUrl.startsWith("http")) {
-                            val req = Request.Builder().url(page.imageUrl).get().build()
+                            val req = Request.Builder()
+                                .url(page.imageUrl)
+                                .apply {
+                                    if (page.headers.isNotEmpty()) {
+                                        headers(page.headers.toHeaders())
+                                    }
+                                }
+                                .get()
+                                .build()
                             container.httpClient.newCall(req).execute().use { resp ->
                                 if (!resp.isSuccessful) throw IOException("HTTP ${resp.code}")
                                 resp.body?.byteStream()?.use { input ->

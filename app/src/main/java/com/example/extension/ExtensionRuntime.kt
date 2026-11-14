@@ -10,7 +10,9 @@ import com.example.domain.model.ExtensionSourceMeta
 import com.example.source.DeclarativeJsonSourceAdapter
 import com.example.source.IpcCompanionSourceAdapter
 import com.example.source.MangaSourceAdapter
+import com.example.source.MihonSourceAdapter
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.json.Json
@@ -24,7 +26,9 @@ data class LoadedExtensionDescriptor(
     val compatibility: ExtensionCompatibilityStatus,
     val lifecycle: ExtensionLifecycleSummary,
     val canExecuteInKoma: Boolean
-)
+) {
+    val canExecuteInKiyomi: Boolean get() = canExecuteInKoma
+}
 
 data class ManifestValidationResult(
     val isValid: Boolean,
@@ -32,7 +36,7 @@ data class ManifestValidationResult(
 )
 
 /**
- * Validates declarative `koma_json_v1` extension adapter manifests (Option B).
+ * Validates declarative `koma_json_v1` / `kiyomi_json_v1` extension adapter manifests.
  * Enforces version bounds, HTTPS-only origins, and at least one browsable/searchable endpoint.
  */
 object KomaManifestValidator {
@@ -44,7 +48,7 @@ object KomaManifestValidator {
             if (apiVersion < 1 || apiVersion > KOMA_API_VERSION) {
                 return ManifestValidationResult(
                     false,
-                    "Unsupported Koma declarative API version v$apiVersion (supported: v1–v$KOMA_API_VERSION)."
+                    "Unsupported Kiyomi declarative API version v$apiVersion (supported: v1–v$KOMA_API_VERSION)."
                 )
             }
         }
@@ -84,21 +88,16 @@ object KomaManifestValidator {
 }
 
 /**
- * Compatibility translation layer between persisted extension metadata and Koma's
+ * Compatibility translation layer between persisted extension metadata and Kiyomi's
  * [MangaSourceAdapter] interface.
- *
- * - Option B (`koma_json_v1`): Translates validated declarative manifests into [DeclarativeJsonSourceAdapter].
- * - Option A (`koma_ipc_v1`): Connects across OS process boundaries to verified standalone companion
- *   apps via [IpcCompanionSourceAdapter] (`ContentResolver` IPC, zero DEX loading).
- * - Native Mihon DEX APKs: Intentionally refused per Google Play DCL & security policy, directing
- *   to Option C native equivalents when available (e.g., MangaDex).
  */
 object ExtensionCompatibilityTranslator {
 
     fun translateToSourceAdapter(
         pkg: ExtensionPackageEntity,
         httpClient: OkHttpClient,
-        context: Context? = null
+        context: Context? = null,
+        mihonLoader: MihonExtensionLoader? = null
     ): Result<MangaSourceAdapter> {
         if (pkg.format == ExtensionFormat.COMPANION_IPC_EXTENSION.id) {
             val appContext = context ?: return Result.failure(
@@ -120,42 +119,40 @@ object ExtensionCompatibilityTranslator {
             }
         }
 
-        if (pkg.format != ExtensionFormat.KOMA_JSON_ADAPTER.id) {
-            val nativeEq = NativeExtensionMappingRegistry.findNativeEquivalent(pkg.pkgId, pkg.name)
-            val nativeHint = if (nativeEq != null) {
-                " Built-in native equivalent '${nativeEq.sourceName}' is available directly in Koma Sources."
-            } else {
-                ""
-            }
-            return Result.failure(
-                UnsupportedOperationException(
-                    "${pkg.name} uses native Mihon/Tachiyomi DEX bytecode (${pkg.libVersion.ifBlank { "DEX" }}). " +
-                        "In-app DEX loading is restricted by Play & sandboxing policy; use koma_json_v1 or an Option A Companion IPC app.$nativeHint"
+        if (pkg.format == ExtensionFormat.KOMA_JSON_ADAPTER.id) {
+            val validation = KomaManifestValidator.validateJsonString(pkg.adapterJson)
+            if (!validation.isValid) {
+                return Result.failure(
+                    IllegalArgumentException(validation.errorReason ?: "Invalid koma_json_v1 manifest.")
                 )
-            )
+            }
+            return runCatching {
+                DeclarativeJsonSourceAdapter(
+                    id = pkg.pkgId,
+                    name = pkg.name,
+                    language = pkg.language,
+                    descriptor = JSONObject(pkg.adapterJson),
+                    httpClient = httpClient
+                )
+            }
         }
 
-        val validation = KomaManifestValidator.validateJsonString(pkg.adapterJson)
-        if (!validation.isValid) {
-            return Result.failure(
-                IllegalArgumentException(validation.errorReason ?: "Invalid koma_json_v1 manifest.")
-            )
+        // Native Mihon APK loaded via MihonExtensionLoader
+        val loaded = mihonLoader?.state?.value?.resultsByPkg?.get(pkg.pkgId)
+        if (loaded is ExtensionLoadResult.Loaded && loaded.adapters.isNotEmpty()) {
+            return Result.success(loaded.adapters.first())
         }
-        return runCatching {
-            DeclarativeJsonSourceAdapter(
-                id = pkg.pkgId,
-                name = pkg.name,
-                language = pkg.language,
-                descriptor = JSONObject(pkg.adapterJson),
-                httpClient = httpClient
+        return Result.failure(
+            IllegalStateException(
+                "${pkg.name} requires OS installation and explicit signer trust approval before its Mihon sources can be loaded."
             )
-        }
+        )
     }
 }
 
 /**
  * Loads parsed extension metadata, sub-source catalogs (`ExtensionSourceMeta`),
- * and lifecycle/compatibility descriptors for installed, companion IPC, and verified packages.
+ * and lifecycle/compatibility descriptors for installed and verified packages.
  */
 object ExtensionLoader {
     private val json = Json { ignoreUnknownKeys = true }
@@ -183,26 +180,36 @@ object ExtensionLoader {
 }
 
 /**
- * Exposes sandboxed Koma declarative adapters (Option B) and out-of-process Companion IPC adapters
- * (Option A) alongside inspected/verified Mihon descriptors.
+ * Exposes sandboxed Kiyomi declarative adapters, Companion IPC adapters, and
+ * verified & trusted installed Mihon extension adapters from [MihonExtensionLoader].
  */
 class ExtensionSourceRegistry(
     private val extensionDao: ExtensionDao,
     private val prefsRepo: AppPreferencesRepository,
     private val httpClient: OkHttpClient,
-    private val context: Context? = null
+    private val context: Context? = null,
+    private val mihonLoader: MihonExtensionLoader? = null
 ) {
+    private val mihonStateFlow: Flow<MihonLoadedState> =
+        mihonLoader?.state ?: MutableStateFlow(MihonLoadedState())
+
     val activeDeclarativeSources: Flow<List<MangaSourceAdapter>> = combine(
         extensionDao.observeInstalledEnabledPackages(),
-        prefsRepo.preferences
-    ) { pkgs, prefs ->
-        pkgs.filter {
+        prefsRepo.preferences,
+        mihonStateFlow
+    ) { pkgs, prefs, mihonState ->
+        val declared = pkgs.filter {
             it.format == ExtensionFormat.KOMA_JSON_ADAPTER.id ||
                 it.format == ExtensionFormat.COMPANION_IPC_EXTENSION.id
         }.mapNotNull { pkg ->
             if (pkg.pkgId in prefs.disabledSourceIds) return@mapNotNull null
-            ExtensionCompatibilityTranslator.translateToSourceAdapter(pkg, httpClient, context).getOrNull()
+            ExtensionCompatibilityTranslator.translateToSourceAdapter(pkg, httpClient, context, mihonLoader).getOrNull()
         }
+        val mihon = mihonState.activeAdapters.filter { adapter ->
+            val pkgDisabled = (adapter as? MihonSourceAdapter)?.extensionPackageName in prefs.disabledSourceIds
+            adapter.id !in prefs.disabledSourceIds && !pkgDisabled
+        }
+        (declared + mihon).distinctBy { it.id }
     }
 
     val verifiedExtensionDescriptors: Flow<List<LoadedExtensionDescriptor>> =
@@ -211,7 +218,8 @@ class ExtensionSourceRegistry(
                 it.isInstalled ||
                     it.localApkPath.isNotBlank() ||
                     it.compatibilityStatus == ExtensionCompatibilityStatus.COMPANION_IPC_READY.name ||
-                    it.compatibilityStatus == ExtensionCompatibilityStatus.NATIVE_EQUIVALENT_AVAILABLE.name
+                    it.compatibilityStatus == ExtensionCompatibilityStatus.VERIFIED_MIHON_READY.name ||
+                    it.compatibilityStatus == ExtensionCompatibilityStatus.INSTALLED_MIHON_ACTIVE.name
             }.map { ExtensionLoader.loadDescriptor(it) }
         }
 }
@@ -233,7 +241,7 @@ class ExtensionUpdateManager(
         packages.filter { it.hasUpdate }.forEach { pkg ->
             val result = when {
                 pkg.format == ExtensionFormat.KOMA_JSON_ADAPTER.id ->
-                    packageManager.installKomaAdapter(pkg)
+                    packageManager.installKiyomiAdapter(pkg)
                 pkg.format == ExtensionFormat.COMPANION_IPC_EXTENSION.id -> {
                     val authority = runCatching {
                         JSONObject(pkg.adapterJson).optString("authority")
@@ -244,7 +252,7 @@ class ExtensionUpdateManager(
                         Result.failure(UnsupportedOperationException("Missing IPC authority"))
                     }
                 }
-                pkg.localApkPath.isNotBlank() ->
+                pkg.localApkPath.isNotBlank() || pkg.isInstalled ->
                     packageManager.downloadAndVerifyMihonApk(pkg).map { }
                 else ->
                     Result.failure(UnsupportedOperationException("No local adapter update available"))

@@ -126,7 +126,7 @@ class MoreViewModel(
         viewModelScope.launch {
             val s = uiState.value
             val report = buildString {
-                appendLine("=== Koma Diagnostics ===")
+                appendLine("=== Kiyomi Diagnostics ===")
                 appendLine("Theme: ${s.prefs.themeMode.label} (AMOLED=${s.prefs.amoledBlack}, Dynamic=${s.prefs.dynamicColor})")
                 appendLine("Demo Mode: ${s.prefs.demoModeEnabled}")
                 appendLine("Library Manga: ${s.stats.totalLibraryManga}")

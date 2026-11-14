@@ -101,10 +101,10 @@ enum class LibrarySort(val id: String, val label: String) {
 }
 
 enum class ExtensionFormat(val id: String, val label: String, val executable: Boolean) {
-    KOMA_JSON_ADAPTER("koma_json_v1", "Koma Declarative Adapter", true),
+    KOMA_JSON_ADAPTER("koma_json_v1", "Kiyomi Declarative Adapter", true),
     COMPANION_IPC_EXTENSION("koma_ipc_v1", "Companion IPC Extension", true),
-    MIHON_PROTOBUF_INDEX("mihon_apk_pb", "Mihon Extension (index.pb)", false),
-    MIHON_JSON_INDEX("mihon_apk_json", "Mihon Extension (index.json)", false),
+    MIHON_PROTOBUF_INDEX("mihon_apk_pb", "Mihon Extension (index.pb)", true),
+    MIHON_JSON_INDEX("mihon_apk_json", "Mihon Extension (index.json)", true),
     EXTERNAL_APK_INCOMPATIBLE("mihon_apk_legacy", "Mihon APK Package", false);
 
     companion object {
@@ -114,25 +114,31 @@ enum class ExtensionFormat(val id: String, val label: String, val executable: Bo
 }
 
 enum class ExtensionCompatibilityStatus(val label: String) {
-    EXECUTABLE_KOMA_JSON("Compatible (koma_json_v1)"),
+    EXECUTABLE_KOMA_JSON("Compatible (kiyomi_json_v1)"),
     COMPANION_IPC_READY("Compatible (Companion IPC)"),
     NATIVE_EQUIVALENT_AVAILABLE("Native Adapter Available"),
-    VERIFIED_MIHON_RUNTIME_RESTRICTED("Mihon APK • Policy Restricted"),
+    VERIFIED_MIHON_READY("Verified APK • Ready to Install"),
+    INSTALLED_MIHON_ACTIVE("Installed • Active"),
+    VERIFIED_MIHON_RUNTIME_RESTRICTED("Mihon APK • Pending Install / Trust"),
     COMPATIBLE_MIHON_METADATA("Compatible Metadata (v1.2–v1.6)"),
     LIB_VERSION_INCOMPATIBLE("Incompatible API Version"),
-    MALFORMED_APK("Malformed / Incomplete APK"),
+    UNSIGNED_APK("Unsigned APK"),
+    MALFORMED_APK("Malformed / Corrupted APK"),
     DIFFERENT_ARCHITECTURE("Different Extension Architecture"),
     SIGNATURE_MISMATCH("Signing Key Fingerprint Mismatch"),
+    UNTRUSTED_SIGNER("Untrusted Signer Certificate"),
     UNTRUSTED_REPO("Repository Untrusted"),
+    MIHON_LOAD_FAILED("Extension Load Failed"),
     UNKNOWN("Pending Inspection")
 }
 
 enum class ApkIncompatibilityCategory(val code: String, val label: String) {
     NONE("OK", "Compatible"),
     API_VERSION_INCOMPATIBLE("A", "Cat A • Incompatible Extension API"),
-    MALFORMED_OR_INCOMPLETE("B", "Cat B • Malformed or Incomplete APK"),
-    MIHON_DEX_POLICY_RESTRICTED("C", "Cat C • Valid Mihon APK (In-App DEX Restricted)"),
-    DIFFERENT_ARCHITECTURE("D", "Cat D • Different Extension Architecture")
+    MALFORMED_OR_INCOMPLETE("B", "Cat B • Invalid, Unsigned, or Tampered APK"),
+    MIHON_DEX_POLICY_RESTRICTED("C", "Cat C • Valid Mihon APK"),
+    DIFFERENT_ARCHITECTURE("D", "Cat D • Different Extension Architecture"),
+    UNTRUSTED("U", "Untrusted Signer or Repository")
 }
 
 enum class ExtensionLifecycleState(val label: String) {

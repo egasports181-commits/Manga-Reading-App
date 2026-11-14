@@ -1,5 +1,6 @@
 package com.example.ui.screens.sources
 
+import android.content.Intent
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -12,6 +13,7 @@ import com.example.data.preferences.UserPreferences
 import com.example.data.repository.ExtensionRepository
 import com.example.data.repository.MangaRepository
 import com.example.domain.model.*
+import com.example.extension.ExtensionInstallEvent
 import com.example.extension.LoadedExtensionDescriptor
 import com.example.network.NetworkErrorFormatter
 import com.example.source.ConfiguredSourceEntry
@@ -55,8 +57,8 @@ enum class ExtensionStoreTab(val label: String) {
 
 enum class ExtensionCompatFilter(val label: String) {
     ALL("All Formats"),
-    EXECUTABLE("Compatible (Koma)"),
-    VERIFIED_APK("Downloaded & Verified"),
+    EXECUTABLE("Compatible (Kiyomi)"),
+    VERIFIED_APK("Verified / Trust Needed"),
     ISSUES("Unsupported / Issues")
 }
 
@@ -119,6 +121,8 @@ class SourcesViewModel(
     private val healthCache = MutableStateFlow<Map<String, SourceHealthStatus>>(emptyMap())
     private val localUiState = MutableStateFlow(SourcesLocalControls())
     private val browseState = MutableStateFlow(BrowseSourceUiState())
+    private val _osActionIntents = MutableSharedFlow<Intent>(extraBufferCapacity = 16)
+    val osActionIntents: SharedFlow<Intent> = _osActionIntents.asSharedFlow()
 
     private data class SourcesLocalControls(
         val langFilter: String = "all",
@@ -219,20 +223,26 @@ class SourcesViewModel(
             val matchesCompat = when (local.extCompatFilter) {
                 ExtensionCompatFilter.ALL -> true
                 ExtensionCompatFilter.EXECUTABLE ->
-                    (pkg.format == ExtensionFormat.KOMA_JSON_ADAPTER.id &&
-                        pkg.compatibilityStatus == ExtensionCompatibilityStatus.EXECUTABLE_KOMA_JSON.name) ||
+                    pkg.compatibilityStatus == ExtensionCompatibilityStatus.EXECUTABLE_KOMA_JSON.name ||
                         pkg.compatibilityStatus == ExtensionCompatibilityStatus.COMPANION_IPC_READY.name ||
+                        pkg.compatibilityStatus == ExtensionCompatibilityStatus.VERIFIED_MIHON_READY.name ||
+                        pkg.compatibilityStatus == ExtensionCompatibilityStatus.INSTALLED_MIHON_ACTIVE.name ||
+                        pkg.compatibilityStatus == ExtensionCompatibilityStatus.COMPATIBLE_MIHON_METADATA.name ||
                         pkg.compatibilityStatus == ExtensionCompatibilityStatus.NATIVE_EQUIVALENT_AVAILABLE.name
-                ExtensionCompatFilter.VERIFIED_APK -> pkg.localApkPath.isNotBlank() && !pkg.isInstalled
+                ExtensionCompatFilter.VERIFIED_APK ->
+                    (pkg.localApkPath.isNotBlank() && !pkg.isInstalled) ||
+                        pkg.compatibilityStatus == ExtensionCompatibilityStatus.VERIFIED_MIHON_READY.name ||
+                        pkg.compatibilityStatus == ExtensionCompatibilityStatus.UNTRUSTED_SIGNER.name
                 ExtensionCompatFilter.ISSUES ->
                     !pkg.installError.isNullOrBlank() ||
+                        pkg.compatibilityStatus == ExtensionCompatibilityStatus.UNSIGNED_APK.name ||
                         pkg.compatibilityStatus == ExtensionCompatibilityStatus.MALFORMED_APK.name ||
                         pkg.compatibilityStatus == ExtensionCompatibilityStatus.SIGNATURE_MISMATCH.name ||
                         pkg.compatibilityStatus == ExtensionCompatibilityStatus.LIB_VERSION_INCOMPATIBLE.name ||
                         pkg.compatibilityStatus == ExtensionCompatibilityStatus.DIFFERENT_ARCHITECTURE.name ||
+                        pkg.compatibilityStatus == ExtensionCompatibilityStatus.UNTRUSTED_SIGNER.name ||
                         pkg.compatibilityStatus == ExtensionCompatibilityStatus.UNTRUSTED_REPO.name ||
-                        (pkg.format != ExtensionFormat.KOMA_JSON_ADAPTER.id &&
-                            pkg.format != ExtensionFormat.COMPANION_IPC_EXTENSION.id)
+                        pkg.compatibilityStatus == ExtensionCompatibilityStatus.MIHON_LOAD_FAILED.name
             }
             fromEnabledRepo && matchesQuery && matchesLang && matchesRepo && matchesSubTab && matchesCompat
         }.let { list ->
@@ -300,18 +310,47 @@ class SourcesViewModel(
     init {
         checkSourceAvailability()
         syncCompanionApps()
+        viewModelScope.launch {
+            extRepo.installEvents.collect { event ->
+                when (event) {
+                    is ExtensionInstallEvent.UserConfirmationRequired -> {
+                        _osActionIntents.tryEmit(event.confirmationIntent)
+                        localUiState.update {
+                            it.copy(statusMsg = "Confirm installation of '${event.pkgId}' in the Android system dialog.")
+                        }
+                    }
+                    is ExtensionInstallEvent.PermissionRequired -> {
+                        _osActionIntents.tryEmit(event.settingsIntent)
+                        localUiState.update { it.copy(errorMsg = event.message) }
+                    }
+                    is ExtensionInstallEvent.Succeeded -> {
+                        extRepo.syncInstalledExtensions()
+                        checkSourceAvailability()
+                        localUiState.update { it.copy(statusMsg = event.message, errorMsg = null) }
+                    }
+                    is ExtensionInstallEvent.Failed -> {
+                        localUiState.update { it.copy(errorMsg = event.reason) }
+                    }
+                    is ExtensionInstallEvent.PackageChanged -> {
+                        extRepo.syncInstalledExtensions()
+                        checkSourceAvailability()
+                    }
+                }
+            }
+        }
     }
 
     fun syncCompanionApps(showFeedback: Boolean = false) {
         viewModelScope.launch {
-            val count = runCatching { extRepo.syncInstalledCompanionApps() }.getOrDefault(0)
+            val count = runCatching { extRepo.syncInstalledExtensions() }.getOrDefault(0)
+            val mihonCount = extRepo.mihonLoadedState.value.activeAdapters.size
             if (showFeedback) {
                 localUiState.update {
                     it.copy(
-                        statusMsg = if (count > 0) {
-                            "Detected $count installed Companion IPC update(s) on device."
+                        statusMsg = if (count > 0 || mihonCount > 0) {
+                            "Reloaded extensions: $mihonCount active Mihon source(s), $count package update(s)."
                         } else {
-                            "Scanned device for Companion IPC apps (`com.koma.extension.IPC_PROVIDER`)."
+                            "Scanned device for Mihon & Companion IPC extensions."
                         }
                     )
                 }
@@ -499,6 +538,24 @@ class SourcesViewModel(
         }
     }
 
+    fun trustExtensionSigner(pkg: ExtensionPackageEntity) {
+        viewModelScope.launch {
+            val res = extRepo.trustExtensionSigner(pkg)
+            localUiState.update {
+                if (res.isSuccess) {
+                    val updated = res.getOrNull()
+                    it.copy(
+                        statusMsg = updated?.compatibilityReason?.takeIf { r -> r.isNotBlank() }
+                            ?: "Signer certificate approved for ${pkg.name}.",
+                        errorMsg = null
+                    )
+                } else {
+                    it.copy(errorMsg = res.exceptionOrNull()?.message ?: "Failed approving signer.")
+                }
+            }
+        }
+    }
+
     fun installOrUpdateExtension(pkg: ExtensionPackageEntity) {
         viewModelScope.launch {
             when (pkg.format) {
@@ -526,18 +583,38 @@ class SourcesViewModel(
                     }
                 }
                 else -> {
-                    val res = extRepo.downloadAndVerifyMihonApk(pkg)
-                    localUiState.update {
-                        if (res.isSuccess) {
-                            val verifiedPkg = res.getOrNull()
-                            val summary = verifiedPkg?.compatibilityReason?.takeIf { r -> r.isNotBlank() }
-                                ?: "Inspected ${pkg.name} APK (${verifiedPkg?.libVersion ?: pkg.libVersion})."
-                            it.copy(statusMsg = summary)
-                        } else {
-                            it.copy(errorMsg = res.exceptionOrNull()?.message ?: "APK inspection failed.")
+                    val status = runCatching {
+                        ExtensionCompatibilityStatus.valueOf(pkg.compatibilityStatus)
+                    }.getOrDefault(ExtensionCompatibilityStatus.UNKNOWN)
+
+                    if (status == ExtensionCompatibilityStatus.VERIFIED_MIHON_READY && pkg.localApkPath.isNotBlank()) {
+                        val installRes = extRepo.requestInstallMihonApk(pkg)
+                        installRes.onFailure { err ->
+                            localUiState.update { it.copy(errorMsg = err.message ?: "OS installer launch failed.") }
+                        }
+                    } else {
+                        val res = extRepo.downloadAndVerifyMihonApk(pkg)
+                        localUiState.update {
+                            if (res.isSuccess) {
+                                val verifiedPkg = res.getOrNull()
+                                val summary = verifiedPkg?.compatibilityReason?.takeIf { r -> r.isNotBlank() }
+                                    ?: "Verified ${pkg.name} APK (${verifiedPkg?.libVersion ?: pkg.libVersion})."
+                                it.copy(statusMsg = summary, errorMsg = null)
+                            } else {
+                                it.copy(errorMsg = res.exceptionOrNull()?.message ?: "APK verification failed.")
+                            }
                         }
                     }
                 }
+            }
+        }
+    }
+
+    fun requestOsInstallMihonApk(pkg: ExtensionPackageEntity) {
+        viewModelScope.launch {
+            val res = extRepo.requestInstallMihonApk(pkg)
+            res.onFailure { err ->
+                localUiState.update { it.copy(errorMsg = err.message ?: "OS installer launch failed.") }
             }
         }
     }
@@ -551,13 +628,34 @@ class SourcesViewModel(
     }
 
     fun setExtensionEnabled(pkgId: String, enabled: Boolean) {
-        viewModelScope.launch { extRepo.setExtensionEnabled(pkgId, enabled) }
+        viewModelScope.launch {
+            extRepo.setExtensionEnabled(pkgId, enabled)
+            checkSourceAvailability()
+        }
     }
 
     fun uninstallExtension(pkgId: String) {
         viewModelScope.launch {
+            val pkg = extRepo.packages.first().firstOrNull { it.pkgId == pkgId }
+            val wasOsInstalled = pkg?.isInstalled == true &&
+                pkg.format != ExtensionFormat.KOMA_JSON_ADAPTER.id &&
+                pkg.format != ExtensionFormat.COMPANION_IPC_EXTENSION.id
+            if (wasOsInstalled) {
+                extRepo.buildOsUninstallIntent(pkgId)?.let { intent ->
+                    _osActionIntents.tryEmit(intent)
+                }
+            }
             extRepo.uninstallExtension(pkgId)
-            localUiState.update { it.copy(statusMsg = "Extension & cached archive removed.") }
+            checkSourceAvailability()
+            localUiState.update {
+                it.copy(
+                    statusMsg = if (wasOsInstalled) {
+                        "Prompted Android OS uninstall & cleared cached archive."
+                    } else {
+                        "Extension & cached archive removed."
+                    }
+                )
+            }
         }
     }
 

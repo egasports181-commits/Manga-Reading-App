@@ -16,6 +16,7 @@ import com.example.network.NetworkErrorFormatter
 import com.example.source.SourceRegistry
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import okhttp3.Headers.Companion.toHeaders
 
 data class ReaderUiState(
     val manga: MangaEntity? = null,
@@ -214,6 +215,11 @@ class ReaderViewModel(
             if (i == index) continue
             val req = ImageRequest.Builder(appContext)
                 .data(pages[i].imageUrl)
+                .apply {
+                    if (pages[i].headers.isNotEmpty()) {
+                        headers(pages[i].headers.toHeaders())
+                    }
+                }
                 .build()
             imageLoader.enqueue(req)
         }

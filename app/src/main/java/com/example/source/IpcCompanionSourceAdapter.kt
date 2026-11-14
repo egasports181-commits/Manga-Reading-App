@@ -15,8 +15,8 @@ import java.io.IOException
  *
  * Communicates strictly across OS-enforced IPC boundaries via Android [android.content.ContentResolver]
  * with a user-installed, signature-verified standalone companion application declaring:
- * - `<action android:name="com.koma.extension.IPC_PROVIDER" />`
- * - `<meta-data android:name="koma.extension.ipc.authority" android:value="..." />`
+ * - `<action android:name="com.kiyomi.extension.IPC_PROVIDER" />` (or legacy `com.koma.extension.IPC_PROVIDER`)
+ * - `<meta-data android:name="kiyomi.extension.ipc.authority" android:value="..." />`
  *
  * Contract methods / paths:
  * - `status` -> `{"online": true}`
@@ -27,7 +27,7 @@ import java.io.IOException
  * - `chapters` (arg: `mangaKey`) -> `{"chapters": [...]}`
  * - `pages` (arg: `chapterKey`) -> `{"pages": [{"url": "...", "headers": {...}}]}`
  *
- * Never loads or executes DEX/APK code inside Koma's process.
+ * Runs companion apps strictly out-of-process across Android IPC boundaries.
  */
 class IpcCompanionSourceAdapter(
     private val context: Context,

@@ -96,15 +96,15 @@ fun BackupScreen(
             item {
                 KomaElevatedCard(shape = RoundedCornerShape(22.dp)) {
                     Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Text("Versioned Koma Backup (v1)", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                        Text("Versioned Kiyomi Backup (v1)", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                         Text(
-                            "Exports your entire library, custom categories, chapter reading progress, tracking entries, source preferences, and app settings to a portable `.koma.json` file via Android Storage Access Framework.",
+                            "Exports your entire library, custom categories, chapter reading progress, tracking entries, source preferences, and app settings to a portable `.kiyomi.json` file via Android Storage Access Framework.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                             Button(
-                                onClick = { createBackupLauncher.launch("koma_backup_v1.json") },
+                                onClick = { createBackupLauncher.launch("kiyomi_backup_v1.json") },
                                 shape = CircleShape,
                                 modifier = Modifier.weight(1f)
                             ) {

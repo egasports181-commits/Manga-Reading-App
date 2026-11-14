@@ -166,7 +166,7 @@ class KomaUpgradeRobolectricTest {
         )
         assertTrue(pkg.sourcesJson.contains("Example Scan"))
         assertTrue(pkg.sourcesJson.contains("https://examplescan.example"))
-        assertEquals(ExtensionCompatibilityStatus.VERIFIED_MIHON_RUNTIME_RESTRICTED.name, pkg.compatibilityStatus)
+        assertEquals(ExtensionCompatibilityStatus.COMPATIBLE_MIHON_METADATA.name, pkg.compatibilityStatus)
 
         val gzOut = ByteArrayOutputStream()
         GZIPOutputStream(gzOut).use { it.write(rawPb) }
@@ -305,9 +305,9 @@ class KomaUpgradeRobolectricTest {
             isRepoTrusted = true,
             signatureMatch = true
         )
-        assertEquals(ExtensionCompatibilityStatus.VERIFIED_MIHON_RUNTIME_RESTRICTED, okMihon.status)
+        assertEquals(ExtensionCompatibilityStatus.COMPATIBLE_MIHON_METADATA, okMihon.status)
         assertEquals("1.4", okMihon.libVersion)
-        assertFalse(okMihon.canExecuteInKoma)
+        assertTrue(okMihon.canExecuteInKiyomi)
 
         val v16Ok = ExtensionCompatibilityResolver.evaluateMetadata(
             format = ExtensionFormat.MIHON_JSON_INDEX,
@@ -315,9 +315,9 @@ class KomaUpgradeRobolectricTest {
             isRepoTrusted = true,
             signatureMatch = true
         )
-        assertEquals(ExtensionCompatibilityStatus.VERIFIED_MIHON_RUNTIME_RESTRICTED, v16Ok.status)
+        assertEquals(ExtensionCompatibilityStatus.COMPATIBLE_MIHON_METADATA, v16Ok.status)
         assertEquals("1.6", v16Ok.libVersion)
-        assertFalse(v16Ok.canExecuteInKoma)
+        assertTrue(v16Ok.canExecuteInKiyomi)
 
         val tooNew = ExtensionCompatibilityResolver.evaluateMetadata(
             format = ExtensionFormat.MIHON_JSON_INDEX,
@@ -965,7 +965,7 @@ class KomaUpgradeRobolectricTest {
             pkg.iconUrl
         )
         assertTrue(pkg.sourcesJson.contains("https://cn.baozimh.com"))
-        assertEquals(ExtensionCompatibilityStatus.VERIFIED_MIHON_RUNTIME_RESTRICTED.name, pkg.compatibilityStatus)
+        assertEquals(ExtensionCompatibilityStatus.COMPATIBLE_MIHON_METADATA.name, pkg.compatibilityStatus)
     }
 
     @Test
@@ -1038,7 +1038,7 @@ class KomaUpgradeRobolectricTest {
 
     @Test
     fun `native apk reports downloaded verified unsupported cleanly while koma_json_v1 translates into working source adapter`() = runTest {
-        // 1) Native APK (BaoziManhuaPlus 1.6.6) must report Downloaded + Verified + Unsupported, NEVER Installed/Active
+        // 1) Verified downloaded Mihon APK before OS installation reports Downloaded + Verified + Compatible, NOT Active yet
         val nativeVerifiedApk = ExtensionPackageEntity(
             pkgId = "eu.kanade.tachiyomi.extension.zh.baozimanhuaplus",
             name = "BaoziManhuaPlus",
@@ -1049,15 +1049,15 @@ class KomaUpgradeRobolectricTest {
             localApkPath = "/data/user/0/com.aistudio.koma/files/extensions_cache/baozi.apk",
             signatureHash = "abcd1234abcd1234",
             libVersion = "1.6",
-            compatibilityStatus = ExtensionCompatibilityStatus.VERIFIED_MIHON_RUNTIME_RESTRICTED.name,
+            compatibilityStatus = ExtensionCompatibilityStatus.VERIFIED_MIHON_READY.name,
             isInstalled = false,
             isEnabled = false
         )
         val nativeLifecycle = ExtensionCompatibilityResolver.resolveLifecycle(nativeVerifiedApk)
         assertTrue(nativeLifecycle.isDownloaded)
         assertTrue(nativeLifecycle.isVerified)
-        assertFalse(nativeLifecycle.isCompatible)
-        assertTrue(nativeLifecycle.isUnsupported)
+        assertTrue(nativeLifecycle.isCompatible)
+        assertFalse(nativeLifecycle.isUnsupported)
         assertFalse(nativeLifecycle.isActive)
         assertEquals(ExtensionLifecycleState.VERIFIED, nativeLifecycle.primaryState)
         assertTrue(ExtensionCompatibilityTranslator.translateToSourceAdapter(nativeVerifiedApk, OkHttpClient()).isFailure)
@@ -1252,7 +1252,7 @@ class KomaUpgradeRobolectricTest {
         assertEquals(ExtensionCompatibilityStatus.MALFORMED_APK, corruptEval.status)
         assertEquals(ApkIncompatibilityCategory.MALFORMED_OR_INCOMPLETE, corruptEval.category)
 
-        // 2) Category B: Fingerprint mismatch when signature is blank must FAIL (fixes old silent-pass security hole)
+        // 2) Category B: Unsigned APK and mismatched signature must BOTH fail securely
         assertFalse(ExtensionSecurityManager.fingerprintsMatch("9add655a78e96c4e", ""))
         val validZipNoPm = ApkInspectionResult(
             packageName = "eu.kanade.tachiyomi.extension.en.good",
@@ -1267,10 +1267,11 @@ class KomaUpgradeRobolectricTest {
             hasAndroidManifestEntry = true,
             hasDexBytecode = true,
             hasSigningBlockOrCert = false,
+            isUnsignedApk = true,
             packageManagerParsed = true,
             structuralIssues = emptyList()
         )
-        val missingSigEval = ExtensionCompatibilityResolver.evaluateApkArchive(
+        val unsignedEval = ExtensionCompatibilityResolver.evaluateApkArchive(
             pkg = ExtensionPackageEntity(
                 pkgId = "eu.kanade.tachiyomi.extension.en.good",
                 name = "Good",
@@ -1281,8 +1282,27 @@ class KomaUpgradeRobolectricTest {
             isRepoTrusted = true,
             expectedFingerprint = "9add655a78e96c4e"
         )
-        assertEquals(ExtensionCompatibilityStatus.SIGNATURE_MISMATCH, missingSigEval.status)
-        assertEquals(ApkIncompatibilityCategory.MALFORMED_OR_INCOMPLETE, missingSigEval.category)
+        assertEquals(ExtensionCompatibilityStatus.UNSIGNED_APK, unsignedEval.status)
+        assertEquals(ApkIncompatibilityCategory.MALFORMED_OR_INCOMPLETE, unsignedEval.category)
+
+        val wrongSigEval = ExtensionCompatibilityResolver.evaluateApkArchive(
+            pkg = ExtensionPackageEntity(
+                pkgId = "eu.kanade.tachiyomi.extension.en.good",
+                name = "Good",
+                versionName = "1.4.2",
+                versionCode = 10
+            ),
+            inspection = validZipNoPm.copy(
+                signatureSha256 = "0000111122223333444455556666777788889999aaaabbbbccccddddeeeeffff",
+                hasSigningBlockOrCert = true,
+                isUnsignedApk = false,
+                isSignatureCryptographicallyVerified = true
+            ),
+            isRepoTrusted = true,
+            expectedFingerprint = "9add655a78e96c4e"
+        )
+        assertEquals(ExtensionCompatibilityStatus.SIGNATURE_MISMATCH, wrongSigEval.status)
+        assertEquals(ApkIncompatibilityCategory.MALFORMED_OR_INCOMPLETE, wrongSigEval.category)
 
         // 3) Category D: Valid signed Android APK missing Mihon extension markers
         val nonMihonInspection = ApkInspectionResult(
@@ -1336,22 +1356,39 @@ class KomaUpgradeRobolectricTest {
         assertEquals(ExtensionCompatibilityStatus.LIB_VERSION_INCOMPATIBLE, catAEval.status)
         assertEquals(ApkIncompatibilityCategory.API_VERSION_INCOMPATIBLE, catAEval.category)
 
-        // 5) Category C: Valid signed Mihon APK targeting supported metadata range (v1.4) + DEX bytecode
-        val catCInspection = catAInspection.copy(versionName = "1.4.12")
-        val catCEval = ExtensionCompatibilityResolver.evaluateApkArchive(
-            pkg = ExtensionPackageEntity(
-                pkgId = "eu.kanade.tachiyomi.extension.en.validmihon",
-                name = "ValidMihon",
-                versionName = "1.4.12",
-                versionCode = 12
-            ),
-            inspection = catCInspection,
-            isRepoTrusted = true,
-            expectedFingerprint = "9add655a78e96c4ec7a53ef89dccb557cb5d767489fac5e785d671a5a75d4da2"
+        // 5) Valid signed Mihon APK targeting supported range (v1.4): untrusted signer blocks install; trusted becomes VERIFIED_MIHON_READY
+        val validMihonInspection = catAInspection.copy(
+            packageName = "eu.kanade.tachiyomi.extension.en.validmihon",
+            versionName = "1.4.12",
+            isSignatureCryptographicallyVerified = true
         )
-        assertEquals(ExtensionCompatibilityStatus.VERIFIED_MIHON_RUNTIME_RESTRICTED, catCEval.status)
-        assertEquals(ApkIncompatibilityCategory.MIHON_DEX_POLICY_RESTRICTED, catCEval.category)
-        assertFalse(catCEval.canExecuteInKoma)
+        val validMihonPkg = ExtensionPackageEntity(
+            pkgId = "eu.kanade.tachiyomi.extension.en.validmihon",
+            name = "ValidMihon",
+            versionName = "1.4.12",
+            versionCode = 12
+        )
+        val untrustedEval = ExtensionCompatibilityResolver.evaluateApkArchive(
+            pkg = validMihonPkg,
+            inspection = validMihonInspection,
+            isRepoTrusted = true,
+            expectedFingerprint = "9add655a78e96c4ec7a53ef89dccb557cb5d767489fac5e785d671a5a75d4da2",
+            isSignerTrusted = false
+        )
+        assertEquals(ExtensionCompatibilityStatus.UNTRUSTED_SIGNER, untrustedEval.status)
+        assertEquals(ApkIncompatibilityCategory.UNTRUSTED, untrustedEval.category)
+        assertFalse(untrustedEval.canExecuteInKiyomi)
+
+        val trustedEval = ExtensionCompatibilityResolver.evaluateApkArchive(
+            pkg = validMihonPkg,
+            inspection = validMihonInspection,
+            isRepoTrusted = true,
+            expectedFingerprint = "9add655a78e96c4ec7a53ef89dccb557cb5d767489fac5e785d671a5a75d4da2",
+            isSignerTrusted = true
+        )
+        assertEquals(ExtensionCompatibilityStatus.VERIFIED_MIHON_READY, trustedEval.status)
+        assertEquals(ApkIncompatibilityCategory.NONE, trustedEval.category)
+        assertTrue(trustedEval.canExecuteInKiyomi)
 
         // 6) End-to-end PackageManager download rejection on malformed APK body
         val db = Room.inMemoryDatabaseBuilder(context, KomaDatabase::class.java)
@@ -1581,7 +1618,7 @@ class KomaUpgradeRobolectricTest {
         val pages = adapter.getChapterPages("ch99")
         assertEquals("https://cdn.example.org/reader", pages.first().headers["Referer"])
 
-        // Option C: Keiyoushi MangaDex maps to built-in native mangadex while reporting DEX restriction honestly
+        // Option C: Keiyoushi MangaDex stays compatible while also linking built-in native MangaDex equivalent
         val mdEval = ExtensionCompatibilityResolver.evaluateMetadata(
             format = ExtensionFormat.MIHON_PROTOBUF_INDEX,
             versionName = "1.4.205",
@@ -1590,9 +1627,9 @@ class KomaUpgradeRobolectricTest {
             pkgId = "eu.kanade.tachiyomi.extension.all.mangadex",
             extensionName = "MangaDex"
         )
-        assertEquals(ExtensionCompatibilityStatus.NATIVE_EQUIVALENT_AVAILABLE, mdEval.status)
+        assertEquals(ExtensionCompatibilityStatus.COMPATIBLE_MIHON_METADATA, mdEval.status)
         assertEquals("mangadex", mdEval.nativeEquivalentSourceId)
-        assertFalse(mdEval.canExecuteInKoma)
+        assertTrue(mdEval.canExecuteInKiyomi)
 
         val mdEntity = ExtensionPackageEntity(
             pkgId = "eu.kanade.tachiyomi.extension.all.mangadex",
@@ -1606,7 +1643,7 @@ class KomaUpgradeRobolectricTest {
         )
         val mdLifecycle = ExtensionCompatibilityResolver.resolveLifecycle(mdEntity)
         assertEquals("mangadex", mdLifecycle.nativeEquivalentSourceId)
-        assertFalse(mdLifecycle.isCompatible)
+        assertTrue(mdLifecycle.isCompatible)
         assertNotNull(mdLifecycle.matrix)
         assertTrue(mdLifecycle.matrix!!.repositoryImported)
         assertTrue(mdLifecycle.matrix!!.metadataRecognized)

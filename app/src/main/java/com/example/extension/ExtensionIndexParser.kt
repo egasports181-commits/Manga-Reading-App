@@ -34,7 +34,7 @@ data class ParsedExtensionIndex(
 
 /**
  * Parses Mihon/Keiyoushi `index.pb` (both `index_v2` Repo schema and legacy `index_v1` schema,
- * raw or gzipped), `index.json` / `index.min.json`, Koma declarative `koma_json_v1`
+ * raw or gzipped), `index.json` / `index.min.json`, Kiyomi declarative `koma_json_v1`
  * repositories or standalone manifests, and sibling `repo.json` metadata.
  */
 object ExtensionIndexParser {
@@ -362,8 +362,8 @@ object ExtensionIndexParser {
                         name = obj.optString("name", pkgId),
                         versionName = vName,
                         versionCode = vCode,
-                        author = obj.optString("author", "Koma Adapter"),
-                        description = obj.optString("description", "Sandboxed Koma declarative REST source"),
+                        author = obj.optString("author", "Kiyomi Adapter"),
+                        description = obj.optString("description", "Sandboxed Kiyomi declarative REST source"),
                         language = obj.optString("lang", "en"),
                         iconUrl = obj.optString("iconUrl"),
                         format = ExtensionFormat.KOMA_JSON_ADAPTER.id,
@@ -377,7 +377,7 @@ object ExtensionIndexParser {
                         sourcesJson = jsonSerializer.encodeToString(sourceList),
                         compatibilityStatus = status.name,
                         compatibilityReason = if (manifestCheck.isValid) {
-                            "Compatible with Koma declarative JSON API (koma_json_v1). Ready to install & activate."
+                            "Compatible with Kiyomi declarative JSON API (koma_json_v1). Ready to install & activate."
                         } else {
                             "Invalid koma_json_v1 manifest: ${manifestCheck.errorReason}"
                         }
@@ -524,21 +524,19 @@ object ExtensionIndexParser {
                 }
             }
 
-            if (extPayloadsV2.isEmpty()) {
-                throw IllegalArgumentException(
-                    "Protobuf index (index_v2${repoName?.let { " for $it" }.orEmpty()}) contained 0 extension records."
-                )
-            }
-
-            val packages = extPayloadsV2.mapIndexedNotNull { idx, payload ->
-                parseProtobufV2ExtensionObject(payload, idx)?.let { ext ->
-                    buildProtobufExtensionEntity(
-                        repoId = repoId,
-                        baseRepoDir = baseRepoDir,
-                        ext = ext,
-                        digest = digest,
-                        isV2 = true
-                    )
+            val packages = if (extPayloadsV2.isEmpty()) {
+                emptyList()
+            } else {
+                extPayloadsV2.mapIndexedNotNull { idx, payload ->
+                    parseProtobufV2ExtensionObject(payload, idx)?.let { ext ->
+                        buildProtobufExtensionEntity(
+                            repoId = repoId,
+                            baseRepoDir = baseRepoDir,
+                            ext = ext,
+                            digest = digest,
+                            isV2 = true
+                        )
+                    }
                 }
             }
 

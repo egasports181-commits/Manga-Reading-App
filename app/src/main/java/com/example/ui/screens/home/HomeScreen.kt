@@ -546,13 +546,13 @@ private fun HomeEditorialTopBar(
                 ) {
                     Image(
                         painter = painterResource(id = R.drawable.ic_koma_logo),
-                        contentDescription = "Koma logo",
+                        contentDescription = "Kiyomi logo",
                         contentScale = ContentScale.Crop,
                         modifier = Modifier.fillMaxSize()
                     )
                 }
                 Text(
-                    text = "Koma",
+                    text = "Kiyomi",
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.ExtraBold,
                     color = MaterialTheme.colorScheme.onBackground
@@ -814,7 +814,7 @@ private fun RankedPosterCarousel(
                     Spacer(Modifier.width(4.dp))
                     Text(
                         text = buildString {
-                            append(card.sourceName.ifBlank { "Koma" })
+                            append(card.sourceName.ifBlank { "Kiyomi" })
                             append("  •  ")
                             append(card.status.label)
                             if (card.latestChapter.isNotBlank()) {
