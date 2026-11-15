@@ -24,6 +24,7 @@ import com.example.extension.ExtensionInstaller
 import com.example.extension.ExtensionTrustManager
 import com.example.extension.MihonExtensionLoader
 import com.example.extension.MihonRuntimeInitializer
+import com.example.source.MangaDexSourceAdapter
 import com.example.source.MihonSourceAdapter
 import com.example.source.SourceRegistry
 import com.example.ui.components.MangaCardUi
@@ -32,10 +33,13 @@ import com.example.ui.screens.sources.ExtensionStoreTab
 import com.example.ui.screens.sources.SourcesScreen
 import com.example.ui.screens.sources.SourcesViewModel
 import com.example.ui.theme.KomaTheme
+import com.example.network.KomaDns
+import com.example.network.KomaNetworkInterceptor
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.NetworkHelper
 import eu.kanade.tachiyomi.network.interceptor.RateLimitInterceptor
 import eu.kanade.tachiyomi.network.interceptor.UncaughtExceptionInterceptor
+import eu.kanade.tachiyomi.network.interceptor.UserAgentInterceptor
 import eu.kanade.tachiyomi.network.interceptor.rateLimit
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
@@ -96,42 +100,100 @@ class KiyomiRuntimeAndSearchRegressionTest {
     }
 
     @Test
-    fun `default httpClient and NetworkHelper register UncaughtExceptionInterceptor once and preserve it on derived builders`() {
+    fun `default httpClient and NetworkHelper register UncaughtExceptionInterceptor and UserAgentInterceptor once in order and preserve on derived builders`() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val container = AppContainer(context)
 
-        // AppContainer.httpClient must have UncaughtExceptionInterceptor as index 0 without duplication
-        assertTrue(container.httpClient.interceptors.firstOrNull() is UncaughtExceptionInterceptor)
-        assertEquals(
-            1,
-            container.httpClient.interceptors.count { it is UncaughtExceptionInterceptor }
-        )
+        // AppContainer.httpClient must have UncaughtExceptionInterceptor (0), UserAgentInterceptor (1), KomaNetworkInterceptor (2)
+        assertTrue(container.httpClient.interceptors.getOrNull(0) is UncaughtExceptionInterceptor)
+        assertTrue(container.httpClient.interceptors.getOrNull(1) is UserAgentInterceptor)
+        assertTrue(container.httpClient.interceptors.getOrNull(2) is KomaNetworkInterceptor)
+        assertEquals(1, container.httpClient.interceptors.count { it is UncaughtExceptionInterceptor })
+        assertEquals(1, container.httpClient.interceptors.count { it is UserAgentInterceptor })
 
-        // NetworkHelper initialized with container.httpClient keeps it single & compatible
+        // NetworkHelper initialized with container.httpClient preserves canonical order without duplication
         val helperFromApp = NetworkHelper(context, container.httpClient)
-        assertEquals(
-            1,
-            helperFromApp.client.interceptors.count { it is UncaughtExceptionInterceptor }
-        )
-        assertEquals(
-            1,
-            helperFromApp.cloudflareClient.interceptors.count { it is UncaughtExceptionInterceptor }
-        )
+        assertTrue(helperFromApp.client.interceptors.getOrNull(0) is UncaughtExceptionInterceptor)
+        assertTrue(helperFromApp.client.interceptors.getOrNull(1) is UserAgentInterceptor)
+        assertEquals(1, helperFromApp.client.interceptors.count { it is UncaughtExceptionInterceptor })
+        assertEquals(1, helperFromApp.client.interceptors.count { it is UserAgentInterceptor })
+        assertEquals(1, helperFromApp.cloudflareClient.interceptors.count { it is UncaughtExceptionInterceptor })
+        assertEquals(1, helperFromApp.cloudflareClient.interceptors.count { it is UserAgentInterceptor })
 
-        // NetworkHelper initialized with a bare OkHttpClient auto-prepends UncaughtExceptionInterceptor once
+        // NetworkHelper initialized with a bare OkHttpClient auto-prepends both interceptors once in order
         val helperFromBare = NetworkHelper(context, OkHttpClient())
-        assertTrue(helperFromBare.client.interceptors.firstOrNull() is UncaughtExceptionInterceptor)
-        assertEquals(
-            1,
-            helperFromBare.client.interceptors.count { it is UncaughtExceptionInterceptor }
-        )
+        assertTrue(helperFromBare.client.interceptors.getOrNull(0) is UncaughtExceptionInterceptor)
+        assertTrue(helperFromBare.client.interceptors.getOrNull(1) is UserAgentInterceptor)
+        assertEquals(1, helperFromBare.client.interceptors.count { it is UncaughtExceptionInterceptor })
+        assertEquals(1, helperFromBare.client.interceptors.count { it is UserAgentInterceptor })
 
-        // Derived clients built via client.newBuilder() (like Mihon extensions do) retain UncaughtExceptionInterceptor
+        // Derived clients built via client.newBuilder() (like Mihon extensions do) retain both interceptors + custom ones
         val derived = helperFromApp.client.newBuilder()
             .rateLimit(3, 1, TimeUnit.SECONDS)
             .build()
-        assertTrue(derived.interceptors.any { it is UncaughtExceptionInterceptor })
+        assertTrue(derived.interceptors.getOrNull(0) is UncaughtExceptionInterceptor)
+        assertTrue(derived.interceptors.getOrNull(1) is UserAgentInterceptor)
         assertTrue(derived.interceptors.any { it is RateLimitInterceptor })
+    }
+
+    @Test
+    fun `UserAgentInterceptor injects default User-Agent on actual HTTP requests preserves custom User-Agent and keeps MangaDex intact`() = runTest {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val db = newInMemoryDb(context)
+        val capturedUserAgents = mutableListOf<String?>()
+        val capturedAccepts = mutableListOf<String?>()
+
+        val transportClient = OkHttpClient.Builder()
+            .addInterceptor { chain ->
+                val req = chain.request()
+                capturedUserAgents.add(req.header("User-Agent"))
+                capturedAccepts.add(req.header("Accept"))
+                val body = when {
+                    req.url.encodedPath == "/ping" -> "pong"
+                    req.url.encodedPath.startsWith("/manga") -> """{"data":[],"total":0}"""
+                    else -> """{"ok":true}"""
+                }
+                Response.Builder()
+                    .request(req)
+                    .protocol(Protocol.HTTP_1_1)
+                    .code(200)
+                    .message("OK")
+                    .body(body.toResponseBody("application/json".toMediaType()))
+                    .build()
+            }
+            .build()
+
+        val helper = object : NetworkHelper(context, transportClient) {
+            override fun defaultUserAgentProvider(): String = KomaDns.USER_AGENT
+        }
+
+        // 1. Request without User-Agent gets defaultUserAgentProvider() injected
+        helper.client.newCall(Request.Builder().url("https://kiyomi.test/default-ua").build()).execute().use { resp ->
+            assertEquals(200, resp.code)
+        }
+        assertEquals(KomaDns.USER_AGENT, capturedUserAgents.last())
+
+        // 2. Request with explicit custom User-Agent preserves custom header untouched
+        helper.client.newCall(
+            Request.Builder()
+                .url("https://kiyomi.test/custom-ua")
+                .header("User-Agent", "CustomExtensionAgent/3.1")
+                .build()
+        ).execute().use { resp ->
+            assertEquals(200, resp.code)
+        }
+        assertEquals("CustomExtensionAgent/3.1", capturedUserAgents.last())
+
+        // 3. MangaDexSourceAdapter requests via normalized default client preserve headers & succeed
+        val mangaDex = MangaDexSourceAdapter(helper.client, db.sourcePreferenceDao())
+        val mdHealth = mangaDex.checkStatus()
+        assertTrue("MangaDex ping should succeed, got ${mdHealth.errorReason}", mdHealth.isOnline)
+        assertEquals(KomaDns.USER_AGENT, capturedUserAgents.last())
+
+        val mdPop = mangaDex.getPopular(1)
+        assertEquals(0, mdPop.items.size)
+        assertEquals(KomaDns.USER_AGENT, capturedUserAgents.last())
+        assertEquals("application/json", capturedAccepts.last())
     }
 
     @Test
@@ -162,6 +224,31 @@ class KiyomiRuntimeAndSearchRegressionTest {
         assertNotNull(callbackError.get())
         assertTrue(callbackError.get()?.cause is IllegalStateException)
 
+        // CancellationException thrown inside an interceptor chain on async Call enqueue must also wrap into IOException
+        val cancelBoomClient = OkHttpClient.Builder()
+            .addInterceptor(UncaughtExceptionInterceptor())
+            .addInterceptor {
+                throw java.util.concurrent.CancellationException("Simulated inner cancel")
+            }
+            .build()
+        val cancelLatch = CountDownLatch(1)
+        val cancelError = AtomicReference<IOException?>(null)
+        cancelBoomClient.newCall(Request.Builder().url("https://kiyomi.test/cancel").build())
+            .enqueue(object : Callback {
+                override fun onFailure(call: Call, e: IOException) {
+                    cancelError.set(e)
+                    cancelLatch.countDown()
+                }
+
+                override fun onResponse(call: Call, response: Response) {
+                    response.close()
+                    cancelLatch.countDown()
+                }
+            })
+        assertTrue(cancelLatch.await(5, TimeUnit.SECONDS))
+        assertNotNull(cancelError.get())
+        assertTrue(cancelError.get()?.cause is java.util.concurrent.CancellationException)
+
         // Genuine SocketTimeoutException passes through directly
         val timeoutClient = OkHttpClient.Builder()
             .addInterceptor(UncaughtExceptionInterceptor())
@@ -185,6 +272,7 @@ class KiyomiRuntimeAndSearchRegressionTest {
 
         val mockHttpClient = OkHttpClient.Builder()
             .addInterceptor(UncaughtExceptionInterceptor())
+            .addInterceptor(UserAgentInterceptor { KomaDns.USER_AGENT })
             .addInterceptor { chain ->
                 if (Looper.getMainLooper().thread == Thread.currentThread()) {
                     executedOnBackgroundThread.set(false)
@@ -577,8 +665,9 @@ class KiyomiRuntimeAndSearchRegressionTest {
     // ---- Test Mihon Extensions ----
 
     /**
-     * Simulates real Keiyoushi extensions (e.g., MangaDex) that explicitly assert
-     * `UncaughtExceptionInterceptor` is registered in `network.client`.
+     * Simulates real Keiyoushi extensions (e.g., MangaDex, lib/randomua) that explicitly assert
+     * BOTH `UncaughtExceptionInterceptor` and `UserAgentInterceptor` are registered in `network.client`
+     * and `network.cloudflareClient`.
      */
     private class StrictInterceptorCheckingHttpSource : HttpSource() {
         override val id: Long = 778899L
@@ -592,7 +681,16 @@ class KiyomiRuntimeAndSearchRegressionTest {
                 check(network.client.interceptors.any { it is UncaughtExceptionInterceptor }) {
                     "uncaughtExceptionInterceptor must be present in default client"
                 }
-                return network.client
+                check(network.client.interceptors.any { it is UserAgentInterceptor }) {
+                    "UserAgentInterceptor must be present in default client"
+                }
+                check(network.cloudflareClient.interceptors.any { it is UncaughtExceptionInterceptor }) {
+                    "uncaughtExceptionInterceptor must be present in cloudflare client"
+                }
+                check(network.cloudflareClient.interceptors.any { it is UserAgentInterceptor }) {
+                    "UserAgentInterceptor must be present in cloudflare client"
+                }
+                return network.client.newBuilder().build()
             }
 
         override fun popularMangaRequest(page: Int): Request = GET("$baseUrl/popular/$page", headers)

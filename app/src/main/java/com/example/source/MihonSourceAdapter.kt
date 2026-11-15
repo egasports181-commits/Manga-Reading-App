@@ -34,7 +34,10 @@ class MihonSourceAdapter(
 ) : MangaSourceAdapter {
 
     val mihonSourceId: Long = runCatching { mihonSource.id }
-        .getOrElse { mihonSource.name.hashCode().toLong() and 0x7FFFFFFFL }
+        .getOrElse {
+            runCatching { mihonSource.name.hashCode().toLong() and 0x7FFFFFFFL }
+                .getOrDefault(extensionPackageName.hashCode().toLong() and 0x7FFFFFFFL)
+        }
 
     override val id: String = "mihon_$mihonSourceId"
     override val name: String = runCatching { mihonSource.name }.getOrDefault(extensionPackageName)
@@ -93,7 +96,7 @@ class MihonSourceAdapter(
             throw ce
         } catch (t: Throwable) {
             runCatching {
-                Log.w("KiyomiSource", "Health check failed [$name] (${t.javaClass.simpleName}): ${t.message}")
+                Log.w("KiyomiSource", "Health check failed [$name] (${t.javaClass.simpleName}): ${t.message}", t)
             }
             SourceHealthStatus(
                 isOnline = false,
@@ -120,7 +123,7 @@ class MihonSourceAdapter(
         } catch (t: Throwable) {
             val elapsed = System.currentTimeMillis() - start
             runCatching {
-                Log.w("KiyomiSource", "$operation failed [$name] (${elapsed}ms): ${t.javaClass.simpleName}: ${t.message}")
+                Log.w("KiyomiSource", "$operation failed [$name] (${elapsed}ms): ${t.javaClass.simpleName}: ${t.message}", t)
             }
             if (t is Exception) {
                 throw t

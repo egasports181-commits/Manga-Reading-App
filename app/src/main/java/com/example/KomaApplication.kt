@@ -26,6 +26,7 @@ import com.example.util.CbzEntryFetcher
 import com.example.util.DemoPageFetcher
 import com.example.worker.LibraryUpdateWorker
 import eu.kanade.tachiyomi.network.interceptor.UncaughtExceptionInterceptor
+import eu.kanade.tachiyomi.network.interceptor.UserAgentInterceptor
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -57,6 +58,7 @@ class AppContainer(context: Context) {
         .sslSocketFactory(tlsConfig.socketFactory, tlsConfig.trustManager)
         .eventListenerFactory { networkEventListener }
         .addInterceptor(UncaughtExceptionInterceptor())
+        .addInterceptor(UserAgentInterceptor { KomaDns.USER_AGENT })
         .addInterceptor(networkInterceptor)
         .connectionSpecs(listOf(ConnectionSpec.MODERN_TLS))
         .followRedirects(true)

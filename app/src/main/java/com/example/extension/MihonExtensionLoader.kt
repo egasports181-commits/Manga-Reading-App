@@ -296,7 +296,8 @@ class MihonExtensionLoader(
             runCatching {
                 Log.w(
                     "KiyomiExt",
-                    "Extension load failed for ${installed.packageName}: $kind (${t.javaClass.simpleName}): ${t.message}"
+                    "Extension load failed for ${installed.packageName}: $kind (${t.javaClass.simpleName}): ${t.message}",
+                    t
                 )
             }
             ExtensionLoadResult.Error(
@@ -330,7 +331,9 @@ class MihonExtensionLoader(
                     )
                 }
             }
-            return loadedSources.distinctBy { it.id }
+            return loadedSources.distinctBy { src ->
+                runCatching { src.id }.getOrElse { System.identityHashCode(src).toLong() }
+            }
         }
     }
 }

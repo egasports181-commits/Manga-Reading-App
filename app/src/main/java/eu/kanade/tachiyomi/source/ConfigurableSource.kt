@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import androidx.preference.PreferenceScreen
 import uy.kohesive.injekt.Injekt
+import uy.kohesive.injekt.api.fullType
 import uy.kohesive.injekt.api.get
 
 interface ConfigurableSource : Source {
@@ -12,7 +13,9 @@ interface ConfigurableSource : Source {
 }
 
 fun ConfigurableSource.getSourcePreferences(): SharedPreferences {
-    val ctx = Injekt.get<Application>()
+    val ctx = Injekt.getInstanceOrElse(fullType<Application>().type) {
+        Injekt.get<Context>()
+    }
     return ctx.getSharedPreferences(sourcePreferenceFileName(id), Context.MODE_PRIVATE)
 }
 

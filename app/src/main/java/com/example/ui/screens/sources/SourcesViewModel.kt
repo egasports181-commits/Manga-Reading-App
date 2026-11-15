@@ -325,7 +325,8 @@ class SourcesViewModel(
             searchHistory = history,
             searchSuggestions = suggestions
         )
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), SourcesUiState())
+    }.flowOn(Dispatchers.Default)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), SourcesUiState())
 
     val browseUiState: StateFlow<BrowseSourceUiState> = browseState.asStateFlow()
 
