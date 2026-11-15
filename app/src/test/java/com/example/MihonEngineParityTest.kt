@@ -58,6 +58,7 @@ import org.robolectric.Shadows
 import org.robolectric.annotation.Config
 import tachiyomi.core.common.util.lang.parseAs as coreParseAs
 import uy.kohesive.injekt.Injekt
+import uy.kohesive.injekt.api.fullType
 import uy.kohesive.injekt.api.get
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -82,13 +83,24 @@ class MihonEngineParityTest {
 
         MihonRuntimeInitializer.ensureInitialized(context, bareClient, forceRebind = true)
 
-        assertTrue(Injekt.hasFactory(NetworkHelper::class.java))
-        assertTrue(Injekt.hasFactory(OkHttpClient::class.java))
-        assertTrue(Injekt.hasFactory(Json::class.java))
-        assertTrue(Injekt.hasFactory(ProtoBuf::class.java))
-        assertTrue(Injekt.hasFactory(XML::class.java))
-        assertTrue(Injekt.hasFactory(JavaScriptEngine::class.java))
-        assertTrue(Injekt.hasFactory(Context::class.java))
+        assertTrue(Injekt.hasFactory(fullType<NetworkHelper>()))
+        assertTrue(Injekt.hasFactory(fullType<OkHttpClient>()))
+        assertTrue(Injekt.hasFactory(fullType<Json>()))
+        assertTrue(Injekt.hasFactory(fullType<ProtoBuf>()))
+        assertTrue(Injekt.hasFactory(fullType<XML>()))
+        assertTrue(Injekt.hasFactory(fullType<JavaScriptEngine>()))
+        assertTrue(Injekt.hasFactory(fullType<Context>()))
+        if (context.applicationContext is android.app.Application) {
+            assertTrue(Injekt.hasFactory(fullType<android.app.Application>()))
+        }
+
+        // Calling ensureInitialized again without forceRebind must be idempotent
+        MihonRuntimeInitializer.ensureInitialized(context, bareClient, forceRebind = false)
+
+        // Verify genuine mihonapp:injekt ABI method InjektKt.getInjekt()
+        val injektKt = Class.forName("uy.kohesive.injekt.InjektKt")
+        val getInjektMethod = injektKt.getMethod("getInjekt")
+        assertSame(Injekt, getInjektMethod.invoke(null))
 
         val boundClient: OkHttpClient = Injekt.get()
         assertTrue(boundClient.interceptors.getOrNull(0) is UncaughtExceptionInterceptor)

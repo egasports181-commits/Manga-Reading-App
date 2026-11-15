@@ -27,6 +27,7 @@ import com.example.util.DemoPageFetcher
 import com.example.worker.LibraryUpdateWorker
 import eu.kanade.tachiyomi.network.interceptor.UncaughtExceptionInterceptor
 import eu.kanade.tachiyomi.network.interceptor.UserAgentInterceptor
+import dev.mihon.injekt.patchInjekt
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -183,6 +184,9 @@ class KomaApplication : Application(), ImageLoaderFactory, Configuration.Provide
         get() = Configuration.Builder().build()
 
     override fun onCreate() {
+        if (MihonRuntimeInitializer.markInjektPatchedIfUnset()) {
+            patchInjekt()
+        }
         super.onCreate()
         container = AppContainer(this)
         schedulePeriodicUpdates()

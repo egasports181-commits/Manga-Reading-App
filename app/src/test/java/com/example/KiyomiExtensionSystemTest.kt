@@ -49,6 +49,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import uy.kohesive.injekt.Injekt
+import uy.kohesive.injekt.api.fullType
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
@@ -278,8 +279,8 @@ class KiyomiExtensionSystemTest {
 
         // 1. Initialize Injekt compatibility singletons with test mockClient
         MihonRuntimeInitializer.ensureInitialized(context, mockClient, forceRebind = true)
-        assertTrue(Injekt.hasFactory(NetworkHelper::class.java))
-        assertTrue(Injekt.hasFactory(Json::class.java))
+        assertTrue(Injekt.hasFactory(fullType<NetworkHelper>()))
+        assertTrue(Injekt.hasFactory(fullType<Json>()))
 
         // 2. Instantiate ParsedHttpSource & SourceFactory through MihonExtensionLoader class resolution
         val loadedParsed = MihonExtensionLoader.instantiateExtensionClasses(

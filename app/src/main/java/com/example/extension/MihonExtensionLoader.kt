@@ -19,16 +19,38 @@ import kotlinx.serialization.protobuf.ProtoBuf
 import nl.adaptivity.xmlutil.XmlDeclMode
 import nl.adaptivity.xmlutil.serialization.XML
 import okhttp3.OkHttpClient
+import dev.mihon.injekt.patchInjekt
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.InjektModule
 import uy.kohesive.injekt.api.InjektRegistrar
 import uy.kohesive.injekt.api.addSingleton
 import uy.kohesive.injekt.api.addSingletonFactory
 import uy.kohesive.injekt.api.fullType
+import java.util.concurrent.atomic.AtomicBoolean
 
 object MihonRuntimeInitializer {
+    private val injektPatched = AtomicBoolean(false)
+
     @Volatile
     private var initialized = false
+
+    fun markInjektPatchedIfUnset(): Boolean = injektPatched.compareAndSet(false, true)
+
+    fun ensureInjektPatched() {
+        if (injektPatched.compareAndSet(false, true)) {
+            patchInjekt()
+        }
+    }
+
+    @OptIn(ExperimentalSerializationApi::class)
+    private fun hasAllCoreFactories(): Boolean =
+        Injekt.hasFactory(fullType<Context>()) &&
+            Injekt.hasFactory(fullType<OkHttpClient>()) &&
+            Injekt.hasFactory(fullType<NetworkHelper>()) &&
+            Injekt.hasFactory(fullType<JavaScriptEngine>()) &&
+            Injekt.hasFactory(fullType<Json>()) &&
+            Injekt.hasFactory(fullType<ProtoBuf>()) &&
+            Injekt.hasFactory(fullType<XML>())
 
     @OptIn(ExperimentalSerializationApi::class)
     fun ensureInitialized(
@@ -39,17 +61,34 @@ object MihonRuntimeInitializer {
         val appCtx = context.applicationContext
         val application = appCtx as? Application
         val normalizedClient = NetworkHelper.ensureDefaultClient(httpClient)
+        ensureInjektPatched()
         synchronized(this) {
-            if (forceRebind || !initialized || !Injekt.hasFactory(NetworkHelper::class.java)) {
-                Injekt.registerModule(object : InjektModule {
-                    override fun InjektRegistrar.registerInjectables() {
-                        if (application != null) {
-                            addSingleton(application)
-                        }
+            if (!forceRebind && initialized && hasAllCoreFactories()) {
+                return
+            }
+            if (forceRebind) {
+                patchInjekt()
+                injektPatched.set(true)
+                initialized = false
+            }
+            Injekt.importModule(object : InjektModule {
+                override fun InjektRegistrar.registerInjectables() {
+                    if (application != null && !Injekt.hasFactory(fullType<Application>())) {
+                        addSingleton(application)
+                    }
+                    if (!Injekt.hasFactory(fullType<Context>())) {
                         addSingleton(fullType<Context>(), appCtx)
+                    }
+                    if (!Injekt.hasFactory(fullType<OkHttpClient>())) {
                         addSingleton(normalizedClient)
-                        addSingleton(NetworkHelper(appCtx, normalizedClient))
+                    }
+                    if (!Injekt.hasFactory(fullType<NetworkHelper>())) {
+                        addSingletonFactory { NetworkHelper(appCtx, normalizedClient) }
+                    }
+                    if (!Injekt.hasFactory(fullType<JavaScriptEngine>())) {
                         addSingletonFactory { JavaScriptEngine(appCtx) }
+                    }
+                    if (!Injekt.hasFactory(fullType<Json>())) {
                         addSingletonFactory {
                             Json {
                                 ignoreUnknownKeys = true
@@ -58,11 +97,15 @@ object MihonRuntimeInitializer {
                                 coerceInputValues = true
                             }
                         }
+                    }
+                    if (!Injekt.hasFactory(fullType<ProtoBuf>())) {
                         addSingletonFactory {
                             ProtoBuf {
                                 encodeDefaults = false
                             }
                         }
+                    }
+                    if (!Injekt.hasFactory(fullType<XML>())) {
                         addSingletonFactory {
                             XML {
                                 defaultPolicy {
@@ -73,14 +116,14 @@ object MihonRuntimeInitializer {
                             }
                         }
                     }
-                })
-                initialized = true
-                runCatching {
-                    Log.i(
-                        "KiyomiExt",
-                        "Mihon runtime initialized (interceptors=${normalizedClient.interceptors.size}, forceRebind=$forceRebind)"
-                    )
                 }
+            })
+            initialized = true
+            runCatching {
+                Log.i(
+                    "KiyomiExt",
+                    "Mihon runtime initialized (interceptors=${normalizedClient.interceptors.size}, forceRebind=$forceRebind)"
+                )
             }
         }
     }
