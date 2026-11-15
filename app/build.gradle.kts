@@ -138,6 +138,7 @@ dependencies {
   implementation(libs.jsoup)
   implementation(libs.rxjava1)
   implementation(libs.androidx.preference)
+  implementation(libs.mihon.injekt)
   // implementation(libs.play.services.location)
   implementation(libs.retrofit)
   testImplementation(libs.androidx.compose.ui.test.junit4)
