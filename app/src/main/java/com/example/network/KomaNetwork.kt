@@ -4,6 +4,8 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.util.Log
+import eu.kanade.tachiyomi.network.HttpException
+import eu.kanade.tachiyomi.network.interceptor.CloudflareBypassRequiredException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -882,6 +884,16 @@ object NetworkErrorFormatter {
         val connect = chain.filterIsInstance<ConnectException>().firstOrNull()
         if (connect != null) {
             return "TCP connection refused or unreachable$hostPrefix (${connect.message ?: "check Wi-Fi/VPN"})."
+        }
+
+        val cfChallenge = chain.filterIsInstance<CloudflareBypassRequiredException>().firstOrNull()
+        if (cfChallenge != null) {
+            return "Cloudflare protection (HTTP ${cfChallenge.statusCode})$hostPrefix. Open the source in WebView or verify clearance cookies."
+        }
+
+        val httpErr = chain.filterIsInstance<HttpException>().firstOrNull()
+        if (httpErr != null) {
+            return "Source returned HTTP ${httpErr.code}$hostPrefix."
         }
 
         val security = chain.filterIsInstance<SecurityException>().firstOrNull()

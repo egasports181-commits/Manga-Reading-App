@@ -210,7 +210,9 @@ object ExtensionCompatibilityResolver {
         isInstalledOnDevice: Boolean = false
     ): CompatibilityEvaluation {
         val effectiveVersionName = inspection.versionName.ifBlank { pkg.versionName }
-        val libVerStr = pkg.libVersion.takeIf { it.isNotBlank() } ?: extractLibVersion(effectiveVersionName)
+        val libVerStr = inspection.libVersion.takeIf { it.isNotBlank() }
+            ?: pkg.libVersion.takeIf { it.isNotBlank() }
+            ?: extractLibVersion(effectiveVersionName)
         val libNumeric = libVerStr.toDoubleOrNull()
         val nativeEq = NativeExtensionMappingRegistry.findNativeEquivalent(
             inspection.packageName.ifBlank { pkg.pkgId },

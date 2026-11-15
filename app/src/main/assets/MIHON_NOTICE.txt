@@ -1,0 +1,7 @@
+Kiyomi — Mihon Extension Compatibility Notice (Apache-2.0)
+
+Extension engine & source-api compatibility modules (`eu.kanade.tachiyomi.*`,
+`tachiyomi.core.*`, `keiyoushi.utils.*`, `uy.kohesive.injekt.*`) are adapted from
+Mihon (mihonapp/mihon) and Mihon extensions-lib (mihonapp/tachiyomix) under
+the Apache License, Version 2.0.
+https://www.apache.org/licenses/LICENSE-2.0

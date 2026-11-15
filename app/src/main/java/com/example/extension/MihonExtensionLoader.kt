@@ -5,14 +5,19 @@ import android.content.Context
 import android.util.Log
 import com.example.source.MangaSourceAdapter
 import com.example.source.MihonSourceAdapter
-import dalvik.system.PathClassLoader
+import eu.kanade.tachiyomi.extension.util.ChildFirstPathClassLoader
+import eu.kanade.tachiyomi.network.JavaScriptEngine
 import eu.kanade.tachiyomi.network.NetworkHelper
 import eu.kanade.tachiyomi.source.Source
 import eu.kanade.tachiyomi.source.SourceFactory
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.protobuf.ProtoBuf
+import nl.adaptivity.xmlutil.XmlDeclMode
+import nl.adaptivity.xmlutil.serialization.XML
 import okhttp3.OkHttpClient
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.InjektModule
@@ -25,6 +30,7 @@ object MihonRuntimeInitializer {
     @Volatile
     private var initialized = false
 
+    @OptIn(ExperimentalSerializationApi::class)
     fun ensureInitialized(
         context: Context,
         httpClient: OkHttpClient,
@@ -43,11 +49,27 @@ object MihonRuntimeInitializer {
                         addSingleton(fullType<Context>(), appCtx)
                         addSingleton(normalizedClient)
                         addSingleton(NetworkHelper(appCtx, normalizedClient))
+                        addSingletonFactory { JavaScriptEngine(appCtx) }
                         addSingletonFactory {
                             Json {
                                 ignoreUnknownKeys = true
                                 explicitNulls = false
                                 isLenient = true
+                                coerceInputValues = true
+                            }
+                        }
+                        addSingletonFactory {
+                            ProtoBuf {
+                                encodeDefaults = false
+                            }
+                        }
+                        addSingletonFactory {
+                            XML {
+                                defaultPolicy {
+                                    ignoreUnknownChildren()
+                                }
+                                autoPolymorphic = true
+                                xmlDeclMode = XmlDeclMode.Charset
                             }
                         }
                     }
@@ -101,7 +123,7 @@ data class MihonLoadedState(
  * Discovers OS-installed Mihon/Tachiyomi extension APKs, cryptographically verifies
  * their signatures (`apksig`), enforces explicit signer trust (`ExtensionTrustManager`),
  * checks `libVersion` compatibility (1.2–1.6), instantiates single `Source` or multi-source
- * `SourceFactory` classes via `PathClassLoader`, and registers `MihonSourceAdapter` instances.
+ * `SourceFactory` classes via [ChildFirstPathClassLoader], and registers `MihonSourceAdapter` instances.
  */
 class MihonExtensionLoader(
     private val context: Context,
@@ -178,7 +200,7 @@ class MihonExtensionLoader(
                 continue
             }
 
-            // 4. Load classes via PathClassLoader using isolated APK path and Kiyomi compatibility runtime parent ClassLoader
+            // 4. Load classes via ChildFirstPathClassLoader using isolated APK path and Kiyomi compatibility runtime parent ClassLoader
             val loadOutcome = loadFromInstalledApk(installed)
             results[installed.packageName] = loadOutcome
 
@@ -222,8 +244,8 @@ class MihonExtensionLoader(
     }
 
     /**
-     * Instantiates Mihon [Source] objects from an installed APK's `sourceApkPath` via [PathClassLoader],
-     * wrapping every returned [Source] in a [MihonSourceAdapter].
+     * Instantiates Mihon [Source] objects from an installed APK's `sourceApkPath` via
+     * [ChildFirstPathClassLoader], wrapping every returned [Source] in a [MihonSourceAdapter].
      */
     private fun loadFromInstalledApk(installed: InstalledExtensionAppInfo): ExtensionLoadResult {
         val apkPath = installed.sourceApkPath
@@ -241,7 +263,7 @@ class MihonExtensionLoader(
         }.getOrNull()
 
         return try {
-            val classLoader = PathClassLoader(
+            val classLoader = ChildFirstPathClassLoader(
                 apkPath,
                 nativeLibDir,
                 context.classLoader ?: javaClass.classLoader

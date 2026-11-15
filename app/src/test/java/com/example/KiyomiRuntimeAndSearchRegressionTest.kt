@@ -1,6 +1,13 @@
 package com.example
 
 import android.content.Context
+import android.content.pm.ApplicationInfo
+import android.content.pm.FeatureInfo
+import android.content.pm.PackageInfo
+import android.content.pm.Signature
+import android.content.pm.SigningInfo
+import android.os.Build
+import android.os.Bundle
 import android.os.Looper
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -50,6 +57,7 @@ import eu.kanade.tachiyomi.source.online.HttpSource
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import okhttp3.Call
 import okhttp3.Callback
@@ -68,6 +76,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows
 import org.robolectric.annotation.Config
 import java.io.IOException
 import java.net.SocketTimeoutException
@@ -97,6 +106,53 @@ class KiyomiRuntimeAndSearchRegressionTest {
             .allowMainThreadQueries()
             .build()
             .also { dbInstances.add(it) }
+    }
+
+    private fun pumpMainLooperUntil(timeoutMs: Long = 5_000L, condition: () -> Boolean) {
+        val mainShadow = Shadows.shadowOf(Looper.getMainLooper())
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (!condition() && System.currentTimeMillis() < deadline) {
+            mainShadow.idle()
+            if (condition()) break
+            Thread.sleep(20)
+            mainShadow.idle()
+        }
+        mainShadow.idle()
+    }
+
+    @Suppress("DEPRECATION")
+    private fun installMockMihonPackageInPm(
+        context: Context,
+        pkgId: String,
+        versionCode: Long,
+        versionName: String,
+        extClass: String = ".MockSource",
+        libVersion: String = "1.4"
+    ) {
+        val fakeCertBytes = "KIYOMI_MOCK_CERT_$pkgId".toByteArray(Charsets.UTF_8)
+        val sig = Signature(fakeCertBytes)
+        val meta = Bundle().apply {
+            putString("tachiyomi.extension.class", extClass)
+            putString("tachiyomix.extensionLib", libVersion)
+        }
+        val appInfo = ApplicationInfo().apply {
+            packageName = pkgId
+            metaData = meta
+            sourceDir = ""
+        }
+        val pkgInfo = PackageInfo().apply {
+            packageName = pkgId
+            this.versionName = versionName
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                longVersionCode = versionCode
+            } else {
+                this.versionCode = versionCode.toInt()
+            }
+            applicationInfo = appInfo
+            signatures = arrayOf(sig)
+            reqFeatures = arrayOf(FeatureInfo().apply { name = "tachiyomi.extension" })
+        }
+        Shadows.shadowOf(context.packageManager).installPackage(pkgInfo)
     }
 
     @Test
@@ -359,8 +415,16 @@ class KiyomiRuntimeAndSearchRegressionTest {
             imageLoader = coil.ImageLoader(context),
             appContext = context
         )
-        delay(200)
-        val readerState = readerVm.uiState.first { !it.isLoading }
+        val collectedReaderStates = java.util.concurrent.CopyOnWriteArrayList<com.example.ui.screens.reader.ReaderUiState>()
+        val collectJob = launch {
+            readerVm.uiState.collect { collectedReaderStates.add(it) }
+        }
+        pumpMainLooperUntil(5_000L) {
+            collectedReaderStates.any { !it.isLoading }
+        }
+        collectJob.cancel()
+        val readerState = collectedReaderStates.lastOrNull { !it.isLoading } ?: readerVm.uiState.value
+        assertFalse("Expected ReaderViewModel to finish loading", readerState.isLoading)
         assertNotNull(readerState.error)
     }
 
@@ -444,10 +508,7 @@ class KiyomiRuntimeAndSearchRegressionTest {
         ) { id ->
             navigatedId.set(id)
         }
-        val deadline = System.currentTimeMillis() + 3000L
-        while (navigatedId.get() == null && System.currentTimeMillis() < deadline) {
-            delay(50)
-        }
+        pumpMainLooperUntil(3_000L) { navigatedId.get() != null }
         assertEquals("${timedOutAdapter.id}::/manga/42", navigatedId.get())
     }
 
@@ -549,6 +610,19 @@ class KiyomiRuntimeAndSearchRegressionTest {
             )
         )
 
+        installMockMihonPackageInPm(
+            context = context,
+            pkgId = "eu.kanade.tachiyomi.extension.en.mangadex",
+            versionCode = 210L,
+            versionName = "1.4.210"
+        )
+        installMockMihonPackageInPm(
+            context = context,
+            pkgId = "eu.kanade.tachiyomi.extension.en.mangasee",
+            versionCode = 40L,
+            versionName = "1.4.40"
+        )
+
         val extRepo = ExtensionRepository(
             extensionDao = db.extensionDao(),
             httpClient = spyClient,
@@ -577,8 +651,10 @@ class KiyomiRuntimeAndSearchRegressionTest {
         )
         val vm = SourcesViewModel(sourceRegistry, extRepo, mangaRepo, prefsRepo)
 
-        // Reset spy counter after any initial source availability check
-        delay(200)
+        // Wait for initial syncCompanionApps + checkStatus on IO/Main, then reset spy counter
+        pumpMainLooperUntil(3_000L) {
+            vm.uiState.value.packages.size == 4 && vm.uiState.value.installedPackagesCount == 2
+        }
         networkCallsDuringSearch.set(0)
 
         // 1. All extensions present

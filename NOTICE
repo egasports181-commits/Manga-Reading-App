@@ -1,0 +1,19 @@
+Kiyomi — Third-Party Open Source Attribution & Notices
+=======================================================
+
+Portions of Kiyomi's Mihon extension compatibility layer (`eu.kanade.tachiyomi.*`,
+`tachiyomi.core.*`, `uy.kohesive.injekt.*`, `ChildFirstPathClassLoader`,
+`NetworkHelper`, `AndroidCookieJar`, `CloudflareInterceptor`, `UncaughtExceptionInterceptor`,
+`UserAgentInterceptor`, `RateLimitInterceptor`, `JavaScriptEngine`, and extension API
+models) adapt or derive from the following Apache-2.0 licensed open-source projects:
+
+1. Mihon (mihonapp/mihon) & Mihon Extensions Library (mihonapp/tachiyomix)
+   Copyright (c) 2015 Javier Tomás and Mihon / Tachiyomi contributors
+   License: Apache License, Version 2.0 (https://www.apache.org/licenses/LICENSE-2.0)
+   Source: https://github.com/mihonapp/mihon
+           https://github.com/mihonapp/tachiyomix
+
+2. Injekt for Kotlin (uy.kohesive.injekt)
+   License: MIT / Apache-2.0 compatible dependency injection interface conventions
+
+All adapted files carry Apache License 2.0 attribution headers.

@@ -37,6 +37,7 @@ data class ApkInspectionResult(
     val targetSdkVersion: Int = 0,
     val hasTachiyomiFeature: Boolean = false,
     val ipcAuthority: String = "",
+    val libVersion: String = "",
     val requestedPermissions: List<String> = emptyList(),
     val structuralIssues: List<String> = emptyList()
 )
@@ -272,6 +273,10 @@ object ExtensionSecurityManager {
             ?: meta?.getString("koma.extension.ipc.authority"))
             .orEmpty()
             .trim()
+        val explicitLibMeta = meta?.getString("tachiyomix.extensionLib")?.trim()
+            ?.takeIf { it.isNotBlank() }
+            ?: meta?.getFloat("tachiyomix.extensionLib", -1f)?.takeIf { it > 0f }?.toString()
+            ?: ""
         val hasFeature = info.reqFeatures?.any { it.name == ACTION_TACHIYOMI_EXTENSION } == true
 
         val pmSigBytes: ByteArray? = (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
@@ -330,6 +335,7 @@ object ExtensionSecurityManager {
             targetSdkVersion = targetSdk,
             hasTachiyomiFeature = hasFeature,
             ipcAuthority = ipcAuthority,
+            libVersion = explicitLibMeta,
             requestedPermissions = info.requestedPermissions?.toList().orEmpty(),
             structuralIssues = issues
         )
@@ -483,7 +489,10 @@ object ExtensionSecurityManager {
             val fpMatch = sigSha.isNotBlank() && fingerprintsMatch(expectedFp, sigSha)
             val vCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) pkgInfo.longVersionCode else pkgInfo.versionCode.toLong()
             val vName = pkgInfo.versionName.orEmpty()
-            val libVer = ExtensionCompatibilityResolver.extractLibVersion(vName)
+            val explicitLibMeta = meta?.getString("tachiyomix.extensionLib")?.trim()
+                ?.takeIf { it.isNotBlank() }
+                ?: meta?.getFloat("tachiyomix.extensionLib", -1f)?.takeIf { it > 0f }?.toString()
+            val libVer = explicitLibMeta ?: ExtensionCompatibilityResolver.extractLibVersion(vName)
             val hasFeature = pkgInfo.reqFeatures?.any { it.name == ACTION_TACHIYOMI_EXTENSION } == true ||
                 apksigAudit?.hasTachiyomiFeature == true
             val isVerified = apksigAudit?.isSignatureCryptographicallyVerified ?: sigSha.isNotBlank()
