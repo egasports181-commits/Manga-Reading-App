@@ -8,6 +8,7 @@
  */
 package keiyoushi.utils
 
+import com.example.network.HttpResponseValidator
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
@@ -34,6 +35,7 @@ inline fun <reified T> String.parseAs(json: Json = jsonInstance): T =
 
 @OptIn(ExperimentalSerializationApi::class)
 inline fun <reified T> Response.parseAs(json: Json = jsonInstance): T = use { resp ->
+    HttpResponseValidator.assertValidJsonResponseForStreaming(resp, T::class.java.simpleName)
     val body = resp.body ?: throw IOException("Response body was null when decoding ${T::class.java.simpleName}")
     json.decodeFromBufferedSource(body.source())
 }

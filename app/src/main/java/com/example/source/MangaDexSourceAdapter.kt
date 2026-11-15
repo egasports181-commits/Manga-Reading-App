@@ -3,6 +3,7 @@ package com.example.source
 import com.example.data.local.dao.SourcePreferenceDao
 import com.example.data.local.entity.SourcePreferenceEntity
 import com.example.domain.model.*
+import com.example.network.HttpResponseValidator
 import com.example.network.NetworkErrorFormatter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -321,15 +322,20 @@ class MangaDexSourceAdapter(
                     .build()
                 httpClient.newCall(req).execute().use { resp ->
                     if (resp.isSuccessful) {
-                        val body = resp.body?.string().orEmpty()
-                        val uname = JSONObject(body).optJSONObject("data")
+                        val json = HttpResponseValidator.parseJsonObjectStrict(resp, "MangaDex Auth")
+                        val uname = json.optJSONObject("data")
                             ?.optJSONObject("attributes")
                             ?.optString("username")
                             ?: username.ifBlank { "MangaDex User" }
                         prefDao.setPreference(SourcePreferenceEntity(id, "session_token", credential))
                         SourceSessionResult.Authenticated(uname, "Verified against /user/me")
                     } else {
-                        SourceSessionResult.Failed("Authentication rejected (HTTP ${resp.code}). Verify your Bearer token.")
+                        val status = resp.code
+                        val ct = resp.header("Content-Type")
+                        val preview = HttpResponseValidator.safeBodyPreview(resp.body?.string().orEmpty())
+                        SourceSessionResult.Failed(
+                            "Authentication rejected (HTTP $status, Content-Type: ${ct ?: "unknown"}): ${preview.ifBlank { "Verify your Bearer token." }}"
+                        )
                     }
                 }
             } catch (e: Exception) {
@@ -458,11 +464,7 @@ class MangaDexSourceAdapter(
 
     private fun executeJson(request: Request): JSONObject {
         httpClient.newCall(request).execute().use { response ->
-            val body = response.body?.string() ?: throw IOException("Empty response")
-            if (!response.isSuccessful) {
-                throw IOException("MangaDex API HTTP ${response.code}: ${body.take(180)}")
-            }
-            return JSONObject(body)
+            return HttpResponseValidator.parseJsonObjectStrict(response, "MangaDex API")
         }
     }
 }

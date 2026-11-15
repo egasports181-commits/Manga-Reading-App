@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import okhttp3.*
 import org.conscrypt.Conscrypt
+import org.json.JSONException
 import org.json.JSONObject
 import java.io.IOException
 import java.net.*
@@ -458,11 +459,8 @@ class KomaDns(
                         .get()
                         .build()
                     bootstrapClient.newCall(req).execute().use { resp ->
-                        if (!resp.isSuccessful) {
-                            throw IOException("DoH HTTP ${resp.code}")
-                        }
-                        val body = resp.body?.string() ?: return@use emptyList()
-                        parseDnsJsonAnswers(body)
+                        val json = HttpResponseValidator.parseJsonObjectStrict(resp, "DoH (${provider.name})")
+                        parseDnsJsonAnswers(json)
                     }
                 }
                 result.onSuccess { addrs ->
@@ -492,8 +490,7 @@ class KomaDns(
         return emptyList()
     }
 
-    private fun parseDnsJsonAnswers(body: String): List<InetAddress> {
-        val json = JSONObject(body)
+    private fun parseDnsJsonAnswers(json: JSONObject): List<InetAddress> {
         val answers = json.optJSONArray("Answer") ?: return emptyList()
         return buildList {
             for (i in 0 until answers.length()) {
@@ -886,6 +883,11 @@ object NetworkErrorFormatter {
             return "TCP connection refused or unreachable$hostPrefix (${connect.message ?: "check Wi-Fi/VPN"})."
         }
 
+        val unexpectedFormat = chain.filterIsInstance<UnexpectedResponseFormatException>().firstOrNull()
+        if (unexpectedFormat != null) {
+            return unexpectedFormat.message
+        }
+
         val cfChallenge = chain.filterIsInstance<CloudflareBypassRequiredException>().firstOrNull()
         if (cfChallenge != null) {
             return "Cloudflare protection (HTTP ${cfChallenge.statusCode})$hostPrefix. Open the source in WebView or verify clearance cookies."
@@ -894,6 +896,16 @@ object NetworkErrorFormatter {
         val httpErr = chain.filterIsInstance<HttpException>().firstOrNull()
         if (httpErr != null) {
             return "Source returned HTTP ${httpErr.code}$hostPrefix."
+        }
+
+        val jsonErr = chain.filterIsInstance<JSONException>().firstOrNull()
+        if (jsonErr != null) {
+            return "Server returned invalid JSON or an unexpected HTML/text page$hostPrefix."
+        }
+
+        val serErr = chain.filterIsInstance<kotlinx.serialization.SerializationException>().firstOrNull()
+        if (serErr != null) {
+            return "Server returned an unexpected or incompatible data format$hostPrefix."
         }
 
         val security = chain.filterIsInstance<SecurityException>().firstOrNull()

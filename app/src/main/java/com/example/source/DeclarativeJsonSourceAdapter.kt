@@ -1,6 +1,7 @@
 package com.example.source
 
 import com.example.domain.model.*
+import com.example.network.HttpResponseValidator
 import com.example.network.NetworkErrorFormatter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -89,8 +90,7 @@ class DeclarativeJsonSourceAdapter(
             .replace("{limit}", pageSize.toString())
             .replace("{lang}", URLEncoder.encode(filters.language ?: language, "UTF-8"))
         val url = resolveUrl(resolvedTemplate)
-        val jsonText = executeGet(url)
-        val root = parseJsonRoot(jsonText)
+        val root = executeJsonRoot(url)
         val listPath = descriptor.optString("itemsPath", "items")
         val array = extractArray(root, listPath)
         val keyField = descriptor.optString("idField", "id")
@@ -135,7 +135,7 @@ class DeclarativeJsonSourceAdapter(
         if (template.isBlank()) {
             return@withContext SourceMangaItem(id, name, mangaKey, mangaKey)
         }
-        val root = JSONObject(executeGet(resolveUrl(template.replace("{id}", mangaKey))))
+        val root = executeJsonObject(resolveUrl(template.replace("{id}", mangaKey)))
         val detailsPath = descriptor.optString("detailsPath", "")
         val obj = if (detailsPath.isNotBlank()) extractObject(root, detailsPath) ?: root else root
         val genresPath = descriptor.optString("genresField", "genres")
@@ -164,7 +164,7 @@ class DeclarativeJsonSourceAdapter(
     override suspend fun getChapters(mangaKey: String): List<SourceChapter> = withContext(Dispatchers.IO) {
         val template = descriptor.optString("chaptersEndpoint", "")
         if (template.isBlank()) return@withContext emptyList()
-        val root = parseJsonRoot(executeGet(resolveUrl(template.replace("{id}", mangaKey))))
+        val root = executeJsonRoot(resolveUrl(template.replace("{id}", mangaKey)))
         val arr = extractArray(root, descriptor.optString("chaptersPath", "chapters"))
         val chapterIdField = descriptor.optString("chapterIdField", "id")
         val chapterTitleField = descriptor.optString("chapterTitleField", "title")
@@ -190,7 +190,7 @@ class DeclarativeJsonSourceAdapter(
     override suspend fun getChapterPages(chapterKey: String): List<SourcePage> = withContext(Dispatchers.IO) {
         val template = descriptor.optString("pagesEndpoint", "")
         if (template.isBlank()) return@withContext emptyList()
-        val root = parseJsonRoot(executeGet(resolveUrl(template.replace("{chapterId}", chapterKey))))
+        val root = executeJsonRoot(resolveUrl(template.replace("{chapterId}", chapterKey)))
         val arr = extractArray(root, descriptor.optString("pagesPath", "pages"))
         val pageUrlField = descriptor.optString("pageUrlField", "url")
         val staticPageHeaders = readHeaderMap(descriptor.optJSONObject("pageHeaders"))
@@ -253,20 +253,22 @@ class DeclarativeJsonSourceAdapter(
         return builder
     }
 
-    private fun executeGet(url: String): String {
+    private fun executeJsonRoot(url: String): Any {
         val req = applyHeaders(
             Request.Builder().url(url).header("Accept", "application/json")
         ).get().build()
         httpClient.newCall(req).execute().use { resp ->
-            val body = resp.body?.string() ?: throw IOException("Empty response from $url")
-            if (!resp.isSuccessful) throw IOException("HTTP ${resp.code} from $url")
-            return body
+            return HttpResponseValidator.parseJsonRootStrict(resp, name)
         }
     }
 
-    private fun parseJsonRoot(raw: String): Any {
-        val trimmed = raw.trim()
-        return if (trimmed.startsWith("[")) JSONArray(trimmed) else JSONObject(trimmed)
+    private fun executeJsonObject(url: String): JSONObject {
+        val req = applyHeaders(
+            Request.Builder().url(url).header("Accept", "application/json")
+        ).get().build()
+        httpClient.newCall(req).execute().use { resp ->
+            return HttpResponseValidator.parseJsonObjectStrict(resp, name)
+        }
     }
 
     private fun extractArray(root: Any, dotPath: String): JSONArray {

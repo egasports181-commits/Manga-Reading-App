@@ -4,6 +4,7 @@ import com.example.data.local.entity.ExtensionPackageEntity
 import com.example.domain.model.ExtensionCompatibilityStatus
 import com.example.domain.model.ExtensionFormat
 import com.example.domain.model.ExtensionSourceMeta
+import com.example.network.HttpResponseValidator
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import org.json.JSONArray
@@ -42,8 +43,10 @@ object ExtensionIndexParser {
     private val jsonSerializer = Json { encodeDefaults = true }
 
     fun parseRepoJson(rawText: String): RepoCompanionMeta? {
+        val trimmed = rawText.trim()
+        if (trimmed.isEmpty() || HttpResponseValidator.isHtmlOrXmlPayload(trimmed)) return null
         return runCatching {
-            val root = JSONObject(rawText.trim())
+            val root = JSONObject(trimmed)
             val meta = root.optJSONObject("meta") ?: root
             RepoCompanionMeta(
                 name = meta.optString("name").trim(),
@@ -84,7 +87,7 @@ object ExtensionIndexParser {
         val baseRepoDir = indexUrl.substringBeforeLast("/", "")
 
         // Reject HTML / XML error pages cleanly instead of feeding them into JSON/Protobuf decoders
-        val htmlOrXmlPreview = sniffHtmlOrXml(bytes)
+        val htmlOrXmlPreview = sniffHtmlOrXml(bytes, contentType)
         if (htmlOrXmlPreview != null) {
             throw IllegalArgumentException(
                 "Expected repository index from '$indexUrl' but received HTML/XML " +
@@ -255,28 +258,14 @@ object ExtensionIndexParser {
         return out.toByteArray()
     }
 
-    private fun sniffHtmlOrXml(bytes: ByteArray): String? {
-        val sampleLen = minOf(bytes.size, 256)
+    private fun sniffHtmlOrXml(bytes: ByteArray, contentType: String? = null): String? {
+        val sampleLen = minOf(bytes.size, 2048)
         val i = skipBomAndWhitespace(bytes, sampleLen)
         if (i >= sampleLen) return null
-        val first = bytes[i].toInt().toChar()
-        if (first != '<') return null
-        val snippet = String(bytes, i, minOf(bytes.size - i, 120), Charsets.UTF_8)
-            .replace("\n", " ")
-            .replace("\r", " ")
-            .trim()
-        val lower = snippet.lowercase()
-        return if (
-            lower.startsWith("<!doctype") ||
-            lower.startsWith("<html") ||
-            lower.startsWith("<head") ||
-            lower.startsWith("<?xml") ||
-            lower.startsWith("<error")
-        ) {
-            snippet
-        } else {
-            null
-        }
+        val headText = String(bytes, i, bytes.size.coerceAtMost(2048) - i, Charsets.UTF_8)
+        if (!HttpResponseValidator.isHtmlOrXmlPayload(headText, contentType)) return null
+        val title = HttpResponseValidator.extractHtmlTitle(headText)
+        return title?.let { "Page title: \"$it\"" } ?: HttpResponseValidator.safeBodyPreview(headText, 120)
     }
 
     private fun sniffPlainTextError(bytes: ByteArray): String? {

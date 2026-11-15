@@ -5,6 +5,7 @@ import com.example.data.local.entity.ExtensionPackageEntity
 import com.example.data.local.entity.ExtensionRepoEntity
 import com.example.domain.model.ExtensionCompatibilityStatus
 import com.example.domain.model.ExtensionFormat
+import com.example.network.HttpResponseValidator
 import com.example.network.NetworkErrorFormatter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -208,6 +209,8 @@ class ExtensionRepositoryManager(
     suspend fun refreshRepository(repo: ExtensionRepoEntity): Result<Int> = withContext(Dispatchers.IO) {
         var lastHttpStatus: Int? = null
         var responseContentType: String? = null
+        var finalResolvedUrl: String = repo.indexUrl
+        val repoLabel = repo.displayName.ifBlank { repo.name }
         try {
             val request = Request.Builder()
                 .url(repo.indexUrl)
@@ -215,23 +218,21 @@ class ExtensionRepositoryManager(
                 .get()
                 .build()
 
-            val rawBytes = httpClient.newCall(request).execute().use { resp ->
+            val (rawBytes, validatedContentType) = httpClient.newCall(request).execute().use { resp ->
                 lastHttpStatus = resp.code
-                responseContentType = resp.header("Content-Type")
-                if (!resp.isSuccessful) {
-                    throw IOException("Repository '${repo.indexUrl}' returned HTTP ${resp.code} (${responseContentType ?: "no content-type"})")
-                }
-                resp.body?.bytes() ?: throw IOException("Empty repository index response from '${repo.indexUrl}'")
+                finalResolvedUrl = resp.request.url.toString()
+                HttpResponseValidator.validateHttpIndexResponse(resp, repoLabel)
             }
+            responseContentType = validatedContentType
 
             val parsedIndex = ExtensionIndexParser.parseIndexBytes(
                 repoId = repo.id,
-                indexUrl = repo.indexUrl,
+                indexUrl = finalResolvedUrl,
                 rawBytes = rawBytes,
                 contentType = responseContentType
             )
             val indexDigest = ExtensionIndexParser.sha256Hex(rawBytes)
-            val companionMeta = fetchCompanionRepoJson(repo.indexUrl)
+            val companionMeta = fetchCompanionRepoJson(finalResolvedUrl)
 
             val resolvedFingerprint = repo.signingKeyFingerprint.ifBlank {
                 parsedIndex.repoFingerprint?.ifBlank { null }
@@ -319,10 +320,11 @@ class ExtensionRepositoryManager(
             )
             Result.success(merged.size)
         } catch (e: Exception) {
+            val host = finalResolvedUrl.toHttpUrlOrNull()?.host ?: repo.indexUrl.toHttpUrlOrNull()?.host
             val formatted = if (e is IllegalArgumentException && e.message?.isNotBlank() == true) {
                 e.message!!
             } else {
-                NetworkErrorFormatter.describe(e, repo.indexUrl.toHttpUrlOrNull()?.host)
+                NetworkErrorFormatter.describe(e, host)
             }
             extensionDao.upsertRepo(
                 repo.copy(
@@ -421,11 +423,15 @@ class ExtensionRepositoryManager(
         val baseDir = indexUrl.substringBeforeLast("/", "")
         if (baseDir.isBlank() || !ExtensionSecurityManager.isSecureHttpsUrl(baseDir)) return null
         return runCatching {
-            val req = Request.Builder().url("$baseDir/repo.json").get().build()
+            val req = Request.Builder()
+                .url("$baseDir/repo.json")
+                .header("Accept", "application/json")
+                .get()
+                .build()
             httpClient.newCall(req).execute().use { resp ->
                 if (!resp.isSuccessful) return null
-                val body = resp.body?.string() ?: return null
-                ExtensionIndexParser.parseRepoJson(body)
+                val jsonObj = HttpResponseValidator.parseJsonObjectStrict(resp, "Repo metadata")
+                ExtensionIndexParser.parseRepoJson(jsonObj.toString())
             }
         }.getOrNull()
     }

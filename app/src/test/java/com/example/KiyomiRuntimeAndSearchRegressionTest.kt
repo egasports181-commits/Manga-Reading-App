@@ -10,10 +10,15 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Looper
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasSetTextAction
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
 import androidx.room.Room
@@ -416,7 +421,7 @@ class KiyomiRuntimeAndSearchRegressionTest {
             appContext = context
         )
         val collectedReaderStates = java.util.concurrent.CopyOnWriteArrayList<com.example.ui.screens.reader.ReaderUiState>()
-        val collectJob = launch {
+        val collectJob = launch(kotlinx.coroutines.Dispatchers.Unconfined) {
             readerVm.uiState.collect { collectedReaderStates.add(it) }
         }
         pumpMainLooperUntil(5_000L) {
@@ -716,25 +721,44 @@ class KiyomiRuntimeAndSearchRegressionTest {
         // Search input is pinned & visible
         composeRule.onNodeWithTag("ext_search_input").assertIsDisplayed()
         composeRule.onNodeWithTag("ext_search_input").performTextInput("ComicK")
-        composeRule.waitForIdle()
-        composeRule.onNodeWithText("ComicK").assertIsDisplayed()
+        composeRule.waitUntil(3_000L) {
+            composeRule.onAllNodes(hasText("ComicK") and !hasSetTextAction())
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+        composeRule.onNode(hasText("ComicK") and !hasSetTextAction()).assertIsDisplayed()
 
         // Clear button resets query
         composeRule.onNodeWithTag("ext_search_clear").performClick()
-        composeRule.waitForIdle()
+        composeRule.waitUntil(3_000L) {
+            composeRule.onAllNodesWithText("MangaDex").fetchSemanticsNodes().isNotEmpty()
+        }
+        composeRule.onNodeWithTag("ext_store_list").performScrollToNode(hasText("MangaDex"))
         composeRule.onNodeWithText("MangaDex").assertIsDisplayed()
 
         // Empty state on non-matching query + Clear Search & Filters button
         composeRule.onNodeWithTag("ext_search_input").performTextInput("zzzz_nonexistent_xyz")
-        composeRule.waitForIdle()
+        composeRule.waitUntil(3_000L) {
+            composeRule.onAllNodesWithText("No Extensions Match \"zzzz_nonexistent_xyz\"")
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+        composeRule.onNodeWithTag("ext_store_list")
+            .performScrollToNode(hasText("No Extensions Match \"zzzz_nonexistent_xyz\""))
         composeRule.onNodeWithText("No Extensions Match \"zzzz_nonexistent_xyz\"").assertIsDisplayed()
-        composeRule.onNodeWithText("Clear Search & Filters").performClick()
-        composeRule.waitForIdle()
+        composeRule.onNodeWithText("Clear Search & Filters")
+            .performScrollTo()
+            .performClick()
+        composeRule.waitUntil(3_000L) {
+            vm.uiState.value.extSearchQuery.isEmpty() && vm.uiState.value.packages.size == 4
+        }
+        composeRule.onNodeWithTag("ext_store_list").performScrollToNode(hasText("Rawkuma"))
         composeRule.onNodeWithText("Rawkuma").assertIsDisplayed()
 
         // Final check: Not installed filter chip works in UI
         composeRule.onNodeWithTag("ext_subtab_not_installed").performClick()
-        composeRule.waitForIdle()
+        composeRule.waitUntil(3_000L) {
+            composeRule.onAllNodesWithText("Rawkuma").fetchSemanticsNodes().isNotEmpty()
+        }
+        composeRule.onNodeWithTag("ext_store_list").performScrollToNode(hasText("Rawkuma"))
         composeRule.onNodeWithText("Rawkuma").assertIsDisplayed()
     }
 

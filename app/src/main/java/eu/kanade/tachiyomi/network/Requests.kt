@@ -8,6 +8,7 @@
  */
 package eu.kanade.tachiyomi.network
 
+import com.example.network.HttpResponseValidator
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.json.Json
@@ -19,6 +20,7 @@ import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.FormBody
 import okhttp3.Headers
+import okhttp3.HttpUrl
 import okhttp3.Request
 import okhttp3.RequestBody
 import okhttp3.Response
@@ -49,6 +51,14 @@ fun GET(
         .build()
 }
 
+@JvmOverloads
+fun GET(
+    url: HttpUrl,
+    headers: Headers = DEFAULT_HEADERS,
+    cache: CacheControl = DEFAULT_CACHE_CONTROL
+): Request = GET(url.toString(), headers, cache)
+
+@JvmOverloads
 fun POST(
     url: String,
     headers: Headers = DEFAULT_HEADERS,
@@ -63,6 +73,15 @@ fun POST(
         .build()
 }
 
+@JvmOverloads
+fun POST(
+    url: HttpUrl,
+    headers: Headers = DEFAULT_HEADERS,
+    body: RequestBody = DEFAULT_BODY,
+    cache: CacheControl = DEFAULT_CACHE_CONTROL
+): Request = POST(url.toString(), headers, body, cache)
+
+@JvmOverloads
 fun PUT(
     url: String,
     headers: Headers = DEFAULT_HEADERS,
@@ -77,6 +96,15 @@ fun PUT(
         .build()
 }
 
+@JvmOverloads
+fun PUT(
+    url: HttpUrl,
+    headers: Headers = DEFAULT_HEADERS,
+    body: RequestBody = DEFAULT_BODY,
+    cache: CacheControl = DEFAULT_CACHE_CONTROL
+): Request = PUT(url.toString(), headers, body, cache)
+
+@JvmOverloads
 fun PATCH(
     url: String,
     headers: Headers = DEFAULT_HEADERS,
@@ -91,6 +119,15 @@ fun PATCH(
         .build()
 }
 
+@JvmOverloads
+fun PATCH(
+    url: HttpUrl,
+    headers: Headers = DEFAULT_HEADERS,
+    body: RequestBody = DEFAULT_BODY,
+    cache: CacheControl = DEFAULT_CACHE_CONTROL
+): Request = PATCH(url.toString(), headers, body, cache)
+
+@JvmOverloads
 fun DELETE(
     url: String,
     headers: Headers = DEFAULT_HEADERS,
@@ -105,6 +142,15 @@ fun DELETE(
         .build()
 }
 
+@JvmOverloads
+fun DELETE(
+    url: HttpUrl,
+    headers: Headers = DEFAULT_HEADERS,
+    body: RequestBody = DEFAULT_BODY,
+    cache: CacheControl = DEFAULT_CACHE_CONTROL
+): Request = DELETE(url.toString(), headers, body, cache)
+
+@JvmOverloads
 fun HEAD(
     url: String,
     headers: Headers = DEFAULT_HEADERS,
@@ -117,6 +163,13 @@ fun HEAD(
         .cacheControl(cache)
         .build()
 }
+
+@JvmOverloads
+fun HEAD(
+    url: HttpUrl,
+    headers: Headers = DEFAULT_HEADERS,
+    cache: CacheControl = DEFAULT_CACHE_CONTROL
+): Request = HEAD(url.toString(), headers, cache)
 
 class HttpException(val code: Int) : IllegalStateException("HTTP error $code")
 
@@ -217,6 +270,7 @@ internal val sharedMihonJson: Json
 
 @OptIn(ExperimentalSerializationApi::class)
 inline fun <reified T> Response.parseAs(json: Json = sharedMihonJson): T = use { resp ->
+    HttpResponseValidator.assertValidJsonResponseForStreaming(resp, T::class.java.simpleName)
     val body = resp.body ?: throw IOException("Response body was null when decoding ${T::class.java.simpleName}")
     json.decodeFromBufferedSource(body.source())
 }

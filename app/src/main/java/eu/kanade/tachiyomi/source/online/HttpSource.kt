@@ -16,12 +16,14 @@ import okhttp3.Request
 import okhttp3.Response
 import rx.Observable
 import uy.kohesive.injekt.injectLazy
+import java.net.URI
+import java.net.URISyntaxException
 import java.security.MessageDigest
 
 @Suppress("DEPRECATION")
 abstract class HttpSource : CatalogueSource {
 
-    protected val network: NetworkHelper by injectLazy()
+    val network: NetworkHelper by injectLazy()
 
     abstract val baseUrl: String
 
@@ -51,7 +53,13 @@ abstract class HttpSource : CatalogueSource {
             } catch (t: Throwable) {
                 Observable.error(t)
             }
-        }.map { response -> popularMangaParse(response) }
+        }.map { response ->
+            try {
+                popularMangaParse(response)
+            } finally {
+                runCatching { response.close() }
+            }
+        }
     }
 
     protected abstract fun popularMangaRequest(page: Int): Request
@@ -65,7 +73,11 @@ abstract class HttpSource : CatalogueSource {
                 Observable.error(t)
             }
         }.map { response ->
-            searchMangaParse(response)
+            try {
+                searchMangaParse(response)
+            } finally {
+                runCatching { response.close() }
+            }
         }
     }
 
@@ -79,7 +91,13 @@ abstract class HttpSource : CatalogueSource {
             } catch (t: Throwable) {
                 Observable.error(t)
             }
-        }.map { response -> latestUpdatesParse(response) }
+        }.map { response ->
+            try {
+                latestUpdatesParse(response)
+            } finally {
+                runCatching { response.close() }
+            }
+        }
     }
 
     protected abstract fun latestUpdatesRequest(page: Int): Request
@@ -93,8 +111,12 @@ abstract class HttpSource : CatalogueSource {
                 Observable.error(t)
             }
         }.map { response ->
-            mangaDetailsParse(response).apply {
-                initialized = true
+            try {
+                mangaDetailsParse(response).apply {
+                    initialized = true
+                }
+            } finally {
+                runCatching { response.close() }
             }
         }
     }
@@ -112,7 +134,13 @@ abstract class HttpSource : CatalogueSource {
             } catch (t: Throwable) {
                 Observable.error(t)
             }
-        }.map { response -> chapterListParse(response) }
+        }.map { response ->
+            try {
+                chapterListParse(response)
+            } finally {
+                runCatching { response.close() }
+            }
+        }
     }
 
     open fun chapterListRequest(manga: SManga): Request {
@@ -128,7 +156,13 @@ abstract class HttpSource : CatalogueSource {
             } catch (t: Throwable) {
                 Observable.error(t)
             }
-        }.map { response -> pageListParse(response) }
+        }.map { response ->
+            try {
+                pageListParse(response)
+            } finally {
+                runCatching { response.close() }
+            }
+        }
     }
 
     open fun pageListRequest(chapter: SChapter): Request {
@@ -144,7 +178,13 @@ abstract class HttpSource : CatalogueSource {
             } catch (t: Throwable) {
                 Observable.error(t)
             }
-        }.map { imageUrlParse(it) }
+        }.map { response ->
+            try {
+                imageUrlParse(response)
+            } finally {
+                runCatching { response.close() }
+            }
+        }
     }
 
     open suspend fun getImageUrl(page: Page): String =
@@ -168,4 +208,35 @@ abstract class HttpSource : CatalogueSource {
     }
 
     override fun getFilterList(): FilterList = FilterList()
+
+    /**
+     * Assigns the url of the manga without the scheme and domain. It saves some space from
+     * the database and makes it easier to migrate domains.
+     */
+    fun SManga.setUrlWithoutDomain(url: String) {
+        this.url = getUrlWithoutDomain(url)
+    }
+
+    /**
+     * Assigns the url of the chapter without the scheme and domain.
+     */
+    fun SChapter.setUrlWithoutDomain(url: String) {
+        this.url = getUrlWithoutDomain(url)
+    }
+
+    private fun getUrlWithoutDomain(orig: String): String {
+        return try {
+            val uri = URI(orig.replace(" ", "%20"))
+            var out = uri.rawPath ?: uri.path.orEmpty()
+            if (!uri.rawQuery.isNullOrBlank()) {
+                out += "?" + uri.rawQuery
+            }
+            if (!uri.rawFragment.isNullOrBlank()) {
+                out += "#" + uri.rawFragment
+            }
+            out
+        } catch (_: URISyntaxException) {
+            orig
+        }
+    }
 }

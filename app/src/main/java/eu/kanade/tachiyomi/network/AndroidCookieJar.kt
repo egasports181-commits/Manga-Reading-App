@@ -24,6 +24,7 @@ class AndroidCookieJar(
 ) : CookieJar {
 
     private val memoryFallback = ConcurrentHashMap<String, MutableList<Cookie>>()
+    private val clearedCookieNamesByHost = ConcurrentHashMap<String, MutableSet<String>>()
 
     private val webCookieManager: CookieManager? by lazy {
         runCatching { CookieManager.getInstance() }.getOrNull()
@@ -32,13 +33,22 @@ class AndroidCookieJar(
     override fun saveFromResponse(url: HttpUrl, cookies: List<Cookie>) {
         if (cookies.isEmpty()) return
 
+        val hostKey = url.host.lowercase()
+        val now = System.currentTimeMillis()
+        val clearedSet = clearedCookieNamesByHost[hostKey]
+        cookies.forEach { incoming ->
+            if (incoming.expiresAt > now && incoming.value.isNotEmpty()) {
+                clearedSet?.remove(incoming.name)
+            }
+        }
+
         backingCookieJar?.saveFromResponse(url, cookies)
 
         val hostList = memoryFallback.getOrPut(url.host) { mutableListOf() }
         synchronized(hostList) {
             cookies.forEach { incoming ->
                 hostList.removeAll { it.name == incoming.name && it.domain == incoming.domain && it.path == incoming.path }
-                if (incoming.expiresAt > System.currentTimeMillis()) {
+                if (incoming.expiresAt > now) {
                     hostList.add(incoming)
                 }
             }
@@ -57,6 +67,7 @@ class AndroidCookieJar(
 
     fun get(url: HttpUrl): List<Cookie> {
         val merged = linkedMapOf<String, Cookie>()
+        val clearedNames = clearedCookieNamesByHost[url.host.lowercase()].orEmpty()
 
         // 1. WebView CookieManager cookies (e.g., cf_clearance or user WebView login)
         runCatching {
@@ -67,7 +78,11 @@ class AndroidCookieJar(
                     val trimmed = part.trim()
                     if (trimmed.isNotEmpty()) {
                         Cookie.parse(url, trimmed)?.let { cookie ->
-                            if (!cookie.name.endsWith("deleted", ignoreCase = true)) {
+                            if (cookie.name !in clearedNames &&
+                                cookie.value.isNotEmpty() &&
+                                !cookie.value.equals("deleted", ignoreCase = true) &&
+                                !cookie.name.endsWith("deleted", ignoreCase = true)
+                            ) {
                                 merged["${cookie.name}|${cookie.domain}|${cookie.path}"] = cookie
                             }
                         }
@@ -79,7 +94,9 @@ class AndroidCookieJar(
         // 2. Kiyomi persistent Room-backed CookieJar (or fallback memory store)
         val delegated = backingCookieJar?.loadForRequest(url).orEmpty()
         delegated.forEach { cookie ->
-            merged.putIfAbsent("${cookie.name}|${cookie.domain}|${cookie.path}", cookie)
+            if (cookie.name !in clearedNames) {
+                merged.putIfAbsent("${cookie.name}|${cookie.domain}|${cookie.path}", cookie)
+            }
         }
 
         val now = System.currentTimeMillis()
@@ -87,7 +104,7 @@ class AndroidCookieJar(
         if (mem != null) {
             synchronized(mem) {
                 mem.removeAll { it.expiresAt <= now }
-                mem.filter { it.matches(url) }.forEach { cookie ->
+                mem.filter { it.matches(url) && it.name !in clearedNames }.forEach { cookie ->
                     merged.putIfAbsent("${cookie.name}|${cookie.domain}|${cookie.path}", cookie)
                 }
             }
@@ -101,13 +118,46 @@ class AndroidCookieJar(
         val existing = get(url)
         var removedCount = 0
 
-        existing.filter { cookie ->
+        val clearedSet = clearedCookieNamesByHost.getOrPut(url.host.lowercase()) {
+            ConcurrentHashMap.newKeySet()
+        }
+        val namesToClear = cookieNames ?: existing.map { it.name }
+        clearedSet.addAll(namesToClear)
+
+        val matching = existing.filter { cookie ->
             cookieNames == null || cookie.name in cookieNames
-        }.forEach { cookie ->
+        }
+        matching.forEach { cookie ->
             removedCount++
             runCatching {
-                webCookieManager?.setCookie(urlString, "${cookie.name}=; Max-Age=$maxAge; Path=${cookie.path}")
+                val deletionDirective = buildString {
+                    append(cookie.name)
+                    append("=; Expires=Thu, 01 Jan 1970 00:00:00 GMT")
+                    if (maxAge >= 0) {
+                        append("; Max-Age=").append(maxAge)
+                    }
+                    append("; Path=").append(cookie.path)
+                }
+                webCookieManager?.setCookie(urlString, deletionDirective)
+                if (!cookie.hostOnly) {
+                    webCookieManager?.setCookie(urlString, "$deletionDirective; Domain=${cookie.domain}")
+                }
             }
+        }
+        if (matching.isNotEmpty()) {
+            runCatching { webCookieManager?.flush() }
+            backingCookieJar?.saveFromResponse(
+                url,
+                matching.map { cookie ->
+                    Cookie.Builder()
+                        .name(cookie.name)
+                        .value("")
+                        .domain(cookie.domain)
+                        .path(cookie.path)
+                        .expiresAt(0L)
+                        .build()
+                }
+            )
         }
 
         memoryFallback[url.host]?.let { list ->
@@ -120,6 +170,7 @@ class AndroidCookieJar(
 
     fun removeAll() {
         memoryFallback.clear()
+        clearedCookieNamesByHost.clear()
         runCatching {
             webCookieManager?.removeAllCookies(null)
             webCookieManager?.flush()

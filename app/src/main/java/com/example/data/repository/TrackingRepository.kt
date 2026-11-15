@@ -7,6 +7,7 @@ import com.example.domain.model.RemoteTrackerSearchResult
 import com.example.domain.model.SyncState
 import com.example.domain.model.TrackerService
 import com.example.domain.model.TrackingStatus
+import com.example.network.HttpResponseValidator
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -74,8 +75,8 @@ class TrackingRepository(
                         .header("Authorization", "Bearer $token")
                         .post(payload.toString().toRequestBody("application/json".toMediaType()))
                         .build()
-                    val body = execute(req)
-                    val list = JSONObject(body).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
+                    val json = executeJson(req, service.displayName)
+                    val list = json.getJSONObject("data").getJSONObject("Page").getJSONArray("media")
                     val results = (0 until list.length()).map { i ->
                         val m = list.getJSONObject(i)
                         val titleObj = m.getJSONObject("title")
@@ -96,7 +97,7 @@ class TrackingRepository(
                         .header("Authorization", "Bearer $token")
                         .get()
                         .build()
-                    val arr = JSONObject(execute(req)).optJSONArray("data") ?: JSONArray()
+                    val arr = executeJson(req, service.displayName).optJSONArray("data") ?: JSONArray()
                     val results = (0 until arr.length()).map { i ->
                         val item = arr.getJSONObject(i)
                         val attrs = item.getJSONObject("attributes")
@@ -116,7 +117,7 @@ class TrackingRepository(
                         .header("Authorization", "Bearer $token")
                         .get()
                         .build()
-                    val arr = JSONObject(execute(req)).optJSONArray("data") ?: JSONArray()
+                    val arr = executeJson(req, service.displayName).optJSONArray("data") ?: JSONArray()
                     val results = (0 until arr.length()).map { i ->
                         val node = arr.getJSONObject(i).getJSONObject("node")
                         RemoteTrackerSearchResult(
@@ -181,7 +182,7 @@ class TrackingRepository(
                         .header("Authorization", "Bearer $token")
                         .post(payload.toString().toRequestBody("application/json".toMediaType()))
                         .build()
-                    execute(req)
+                    executeJson(req, service.displayName)
                 }
                 val synced = entry.copy(
                     syncState = SyncState.SYNCED.name,
@@ -201,11 +202,9 @@ class TrackingRepository(
 
     suspend fun deleteTracking(id: Long) = trackingDao.deleteTracking(id)
 
-    private fun execute(req: Request): String {
+    private fun executeJson(req: Request, serviceLabel: String): JSONObject {
         httpClient.newCall(req).execute().use { resp ->
-            val body = resp.body?.string() ?: throw IOException("Empty response")
-            if (!resp.isSuccessful) throw IOException("HTTP ${resp.code}: ${body.take(150)}")
-            return body
+            return HttpResponseValidator.parseJsonObjectStrict(resp, serviceLabel)
         }
     }
 }

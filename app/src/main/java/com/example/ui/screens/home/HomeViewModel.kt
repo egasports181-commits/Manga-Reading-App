@@ -11,6 +11,7 @@ import com.example.domain.model.*
 import com.example.network.NetworkErrorFormatter
 import com.example.source.SourceRegistry
 import com.example.ui.components.MangaCardUi
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
@@ -198,11 +199,13 @@ class HomeViewModel(
                         personalized = personalizedCards.take(10)
                     )
                 }
-            } catch (e: Exception) {
+            } catch (ce: CancellationException) {
+                throw ce
+            } catch (t: Throwable) {
                 liveFeedState.update {
                     it.copy(
                         isLoading = false,
-                        error = "${NetworkErrorFormatter.describe(e)} Check connection or enable Demo Mode."
+                        error = NetworkErrorFormatter.describe(t)
                     )
                 }
             }

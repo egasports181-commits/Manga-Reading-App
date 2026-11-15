@@ -8,6 +8,7 @@
  */
 package tachiyomi.core.common.util.lang
 
+import com.example.network.HttpResponseValidator
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
@@ -35,6 +36,7 @@ inline fun <reified T> String.parseAs(json: Json = mihonCoreJson): T =
 
 @OptIn(ExperimentalSerializationApi::class)
 inline fun <reified T> Response.parseAs(json: Json = mihonCoreJson): T = use { resp ->
+    HttpResponseValidator.assertValidJsonResponseForStreaming(resp, T::class.java.simpleName)
     val body = resp.body ?: throw IOException("Response body was null when decoding ${T::class.java.simpleName}")
     json.decodeFromBufferedSource(body.source())
 }

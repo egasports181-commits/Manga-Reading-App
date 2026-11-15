@@ -5,7 +5,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.Transient
 
 @Serializable
-open class Page(
+open class Page @JvmOverloads constructor(
     val index: Int,
     val url: String = "",
     var imageUrl: String? = null,
