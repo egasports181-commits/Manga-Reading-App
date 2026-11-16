@@ -24,6 +24,7 @@ data class MangaDetailUiState(
     val trackingEntries: List<TrackingEntryEntity> = emptyList(),
     val isRefreshing: Boolean = false,
     val error: String? = null,
+    val cloudflareUrl: String? = null,
     val statusBanner: String? = null,
     val showUnreadOnly: Boolean = false,
     val ascendingChapters: Boolean = false,
@@ -43,6 +44,7 @@ class MangaDetailViewModel(
     private data class LocalDetailControls(
         val isRefreshing: Boolean = false,
         val error: String? = null,
+        val cloudflareUrl: String? = null,
         val banner: String? = null,
         val unreadOnly: Boolean = false,
         val ascending: Boolean = false,
@@ -81,6 +83,7 @@ class MangaDetailViewModel(
             trackingEntries = tracking,
             isRefreshing = local.isRefreshing,
             error = local.error,
+            cloudflareUrl = local.cloudflareUrl,
             statusBanner = local.banner,
             showUnreadOnly = local.unreadOnly,
             ascendingChapters = local.ascending,
@@ -95,14 +98,18 @@ class MangaDetailViewModel(
 
     fun refresh() {
         viewModelScope.launch {
-            localState.update { it.copy(isRefreshing = true, error = null) }
+            localState.update { it.copy(isRefreshing = true, error = null, cloudflareUrl = null) }
             val res = mangaRepo.refreshMangaAndChapters(mangaId)
             localState.update {
-                if (res.isSuccess) it.copy(isRefreshing = false)
-                else it.copy(
-                    isRefreshing = false,
-                    error = NetworkErrorFormatter.describe(res.exceptionOrNull())
-                )
+                if (res.isSuccess) it.copy(isRefreshing = false, cloudflareUrl = null)
+                else {
+                    val err = res.exceptionOrNull()
+                    it.copy(
+                        isRefreshing = false,
+                        error = NetworkErrorFormatter.describe(err),
+                        cloudflareUrl = NetworkErrorFormatter.extractCloudflareUrl(err)
+                    )
+                }
             }
         }
     }

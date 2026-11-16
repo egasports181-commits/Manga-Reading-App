@@ -17,6 +17,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -28,6 +29,7 @@ import com.example.ui.components.KomaEmptyState
 import com.example.ui.components.LiquidGlassTopBar
 import com.example.ui.components.MangaCardSkeletonRow
 import com.example.ui.components.MangaCoverCard
+import com.example.ui.components.rememberCloudflareWebViewLauncher
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -42,6 +44,9 @@ fun SourceBrowseScreen(
     }
 
     val state by viewModel.browseUiState.collectAsStateWithLifecycle()
+    val launchWebView = rememberCloudflareWebViewLauncher {
+        viewModel.loadSourcePage(state.page, append = false)
+    }
     var showSearchBar by remember { mutableStateOf(false) }
     var showFilters by remember { mutableStateOf(false) }
     var showPrefsDialog by remember { mutableStateOf(false) }
@@ -108,6 +113,20 @@ fun SourceBrowseScreen(
                             contentDescription = "Source filters",
                             onClick = { showFilters = true }
                         )
+                        if (state.sourceBaseUrl.startsWith("http", ignoreCase = true)) {
+                            Spacer(Modifier.width(4.dp))
+                            KomaCircularGlassButton(
+                                icon = Icons.Default.Public,
+                                contentDescription = "Open in WebView",
+                                onClick = {
+                                    launchWebView(
+                                        state.cloudflareUrl ?: state.sourceBaseUrl,
+                                        state.sourceName
+                                    )
+                                },
+                                modifier = Modifier.testTag("browse_webview_button")
+                            )
+                        }
                         if (state.supportsLogin) {
                             Spacer(Modifier.width(4.dp))
                             KomaCircularGlassButton(
@@ -176,7 +195,10 @@ fun SourceBrowseScreen(
             state.error?.let { err ->
                 ErrorRetryBanner(
                     message = err,
-                    onRetry = { viewModel.loadSourcePage(state.page, append = false) }
+                    onRetry = { viewModel.loadSourcePage(state.page, append = false) },
+                    onOpenWebView = state.cloudflareUrl?.let { cfUrl ->
+                        { launchWebView(cfUrl, state.sourceName) }
+                    }
                 )
             }
 

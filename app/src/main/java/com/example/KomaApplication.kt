@@ -16,6 +16,7 @@ import com.example.extension.ExtensionSessionManager
 import com.example.extension.ExtensionTrustManager
 import com.example.extension.MihonExtensionLoader
 import com.example.extension.MihonRuntimeInitializer
+import com.example.network.CloudflareChallengeCoordinator
 import com.example.network.KomaDns
 import com.example.network.KomaNetworkEventListener
 import com.example.network.KomaNetworkInterceptor
@@ -25,6 +26,8 @@ import com.example.source.SourceRegistry
 import com.example.util.CbzEntryFetcher
 import com.example.util.DemoPageFetcher
 import com.example.worker.LibraryUpdateWorker
+import eu.kanade.tachiyomi.network.AndroidCookieJar
+import eu.kanade.tachiyomi.network.interceptor.CloudflareInterceptor
 import eu.kanade.tachiyomi.network.interceptor.UncaughtExceptionInterceptor
 import eu.kanade.tachiyomi.network.interceptor.UserAgentInterceptor
 import dev.mihon.injekt.patchInjekt
@@ -48,19 +51,29 @@ class AppContainer(context: Context) {
     val networkDiagnostics = NetworkDiagnosticsTracker(appContext)
     val komaDns = KomaDns(networkDiagnostics)
     val sessionManager = ExtensionSessionManager(database.extensionDao())
+    val androidCookieJar = AndroidCookieJar(sessionManager.cookieJar)
+    val cloudflareCoordinator = CloudflareChallengeCoordinator(androidCookieJar)
     val networkEventListener = KomaNetworkEventListener(networkDiagnostics, komaDns)
     val networkInterceptor = KomaNetworkInterceptor(networkDiagnostics, komaDns, networkEventListener)
 
     val tlsConfig = KomaTlsProvider.configuration
 
+    val cloudflareInterceptor = CloudflareInterceptor(
+        context = appContext,
+        cookieJar = androidCookieJar,
+        defaultUserAgentProvider = { KomaDns.USER_AGENT },
+        challengeSolver = cloudflareCoordinator
+    )
+
     val httpClient: OkHttpClient = OkHttpClient.Builder()
         .dns(komaDns)
-        .cookieJar(sessionManager.cookieJar)
+        .cookieJar(androidCookieJar)
         .sslSocketFactory(tlsConfig.socketFactory, tlsConfig.trustManager)
         .eventListenerFactory { networkEventListener }
         .addInterceptor(UncaughtExceptionInterceptor())
         .addInterceptor(UserAgentInterceptor { KomaDns.USER_AGENT })
         .addInterceptor(networkInterceptor)
+        .addInterceptor(cloudflareInterceptor)
         .connectionSpecs(listOf(ConnectionSpec.MODERN_TLS))
         .followRedirects(true)
         .followSslRedirects(true)
@@ -153,7 +166,13 @@ class AppContainer(context: Context) {
     )
 
     init {
-        MihonRuntimeInitializer.ensureInitialized(appContext, httpClient)
+        (appContext as? Application)?.let { cloudflareCoordinator.attachToApplication(it) }
+        MihonRuntimeInitializer.ensureInitialized(
+            context = appContext,
+            httpClient = httpClient,
+            sharedCookieJar = androidCookieJar,
+            cloudflareSolver = cloudflareCoordinator
+        )
         extensionInstaller.registerReceivers()
         appScope.launch {
             sessionManager.preloadCookies()
@@ -189,6 +208,7 @@ class KomaApplication : Application(), ImageLoaderFactory, Configuration.Provide
         }
         super.onCreate()
         container = AppContainer(this)
+        container.cloudflareCoordinator.attachToApplication(this)
         schedulePeriodicUpdates()
     }
 

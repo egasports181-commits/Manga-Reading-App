@@ -890,7 +890,11 @@ object NetworkErrorFormatter {
 
         val cfChallenge = chain.filterIsInstance<CloudflareBypassRequiredException>().firstOrNull()
         if (cfChallenge != null) {
-            return "Cloudflare protection (HTTP ${cfChallenge.statusCode})$hostPrefix. Open the source in WebView or verify clearance cookies."
+            return if (cfChallenge.verificationAttempted) {
+                "Cloudflare protection (HTTP ${cfChallenge.statusCode})$hostPrefix could not be cleared after verification. Retry WebView verification or check clearance cookies."
+            } else {
+                "Cloudflare protection (HTTP ${cfChallenge.statusCode})$hostPrefix. Open the source in WebView or verify clearance cookies."
+            }
         }
 
         val httpErr = chain.filterIsInstance<HttpException>().firstOrNull()
@@ -923,6 +927,13 @@ object NetworkErrorFormatter {
         }
 
         return error.message ?: error.javaClass.simpleName
+    }
+
+    fun extractCloudflareUrl(error: Throwable?): String? {
+        return unwrapChain(error)
+            .filterIsInstance<CloudflareBypassRequiredException>()
+            .firstOrNull()
+            ?.url
     }
 
     private fun unwrapChain(error: Throwable?): List<Throwable> {

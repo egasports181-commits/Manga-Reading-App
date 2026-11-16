@@ -6,8 +6,10 @@ import android.util.Log
 import com.example.source.MangaSourceAdapter
 import com.example.source.MihonSourceAdapter
 import eu.kanade.tachiyomi.extension.util.ChildFirstPathClassLoader
+import eu.kanade.tachiyomi.network.AndroidCookieJar
 import eu.kanade.tachiyomi.network.JavaScriptEngine
 import eu.kanade.tachiyomi.network.NetworkHelper
+import eu.kanade.tachiyomi.network.interceptor.CloudflareChallengeSolver
 import eu.kanade.tachiyomi.source.Source
 import eu.kanade.tachiyomi.source.SourceFactory
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -56,11 +58,21 @@ object MihonRuntimeInitializer {
     fun ensureInitialized(
         context: Context,
         httpClient: OkHttpClient,
-        forceRebind: Boolean = false
+        forceRebind: Boolean = false,
+        sharedCookieJar: AndroidCookieJar? = null,
+        cloudflareSolver: CloudflareChallengeSolver? = null
     ) {
         val appCtx = context.applicationContext
         val application = appCtx as? Application
-        val normalizedClient = NetworkHelper.ensureDefaultClient(httpClient)
+        val resolvedJar = sharedCookieJar
+            ?: (httpClient.cookieJar as? AndroidCookieJar)
+            ?: AndroidCookieJar(httpClient.cookieJar)
+        val normalizedClient = NetworkHelper.ensureDefaultClient(
+            baseClient = httpClient,
+            context = appCtx,
+            cookieJar = resolvedJar,
+            cloudflareSolver = cloudflareSolver
+        )
         ensureInjektPatched()
         synchronized(this) {
             if (!forceRebind && initialized && hasAllCoreFactories()) {
@@ -83,7 +95,14 @@ object MihonRuntimeInitializer {
                         addSingleton(normalizedClient)
                     }
                     if (!Injekt.hasFactory(fullType<NetworkHelper>())) {
-                        addSingletonFactory { NetworkHelper(appCtx, normalizedClient) }
+                        addSingletonFactory {
+                            NetworkHelper(
+                                context = appCtx,
+                                baseClient = normalizedClient,
+                                sharedCookieJar = resolvedJar,
+                                cloudflareSolver = cloudflareSolver
+                            )
+                        }
                     }
                     if (!Injekt.hasFactory(fullType<JavaScriptEngine>())) {
                         addSingletonFactory { JavaScriptEngine(appCtx) }

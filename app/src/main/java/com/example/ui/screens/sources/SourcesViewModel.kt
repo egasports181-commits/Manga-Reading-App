@@ -92,6 +92,7 @@ data class SourcesUiState(
     val isRefreshingRepos: Boolean = false,
     val statusMessage: String? = null,
     val errorMessage: String? = null,
+    val errorCloudflareUrl: String? = null,
     val exportedReposJson: String? = null,
     val safLocalFolderUri: String = "",
     // Global Search
@@ -101,6 +102,7 @@ data class SourcesUiState(
     val isSearchingGlobal: Boolean = false,
     val globalResults: Map<String, List<MangaCardUi>> = emptyMap(),
     val globalSourceErrors: Map<String, String> = emptyMap(),
+    val globalSourceCloudflareUrls: Map<String, String> = emptyMap(),
     val duplicateTitlesAcrossSources: Set<String> = emptySet(),
     val searchHistory: List<SearchHistoryEntity> = emptyList(),
     val searchSuggestions: List<String> = emptyList()
@@ -109,6 +111,7 @@ data class SourcesUiState(
 data class BrowseSourceUiState(
     val sourceId: String = "",
     val sourceName: String = "",
+    val sourceBaseUrl: String = "",
     val mode: String = "popular",
     val query: String = "",
     val filters: SearchFilters = SearchFilters(),
@@ -117,6 +120,7 @@ data class BrowseSourceUiState(
     val hasNextPage: Boolean = false,
     val isLoading: Boolean = false,
     val error: String? = null,
+    val cloudflareUrl: String? = null,
     val preferences: List<SourcePreferenceItem> = emptyList(),
     val supportsLogin: Boolean = false,
     val loginFeedback: String? = null
@@ -149,12 +153,14 @@ class SourcesViewModel(
         val isRefreshingRepos: Boolean = false,
         val statusMsg: String? = null,
         val errorMsg: String? = null,
+        val errorCloudflareUrl: String? = null,
         val exportedReposJson: String? = null,
         val globalQuery: String = "",
         val globalFilters: SearchFilters = SearchFilters(),
         val isSearchingGlobal: Boolean = false,
         val globalResults: Map<String, List<MangaCardUi>> = emptyMap(),
-        val globalErrors: Map<String, String> = emptyMap()
+        val globalErrors: Map<String, String> = emptyMap(),
+        val globalCloudflareUrls: Map<String, String> = emptyMap()
     )
 
     private val extensionFlows = combine(
@@ -313,6 +319,7 @@ class SourcesViewModel(
             isRefreshingRepos = local.isRefreshingRepos,
             statusMessage = local.statusMsg,
             errorMessage = local.errorMsg,
+            errorCloudflareUrl = local.errorCloudflareUrl,
             exportedReposJson = local.exportedReposJson,
             safLocalFolderUri = prefs.localSafSourceTreeUri,
             globalQuery = local.globalQuery,
@@ -321,6 +328,7 @@ class SourcesViewModel(
             isSearchingGlobal = local.isSearchingGlobal,
             globalResults = local.globalResults,
             globalSourceErrors = local.globalErrors,
+            globalSourceCloudflareUrls = local.globalCloudflareUrls,
             duplicateTitlesAcrossSources = duplicateTitles,
             searchHistory = history,
             searchSuggestions = suggestions
@@ -478,7 +486,7 @@ class SourcesViewModel(
     }
 
     fun clearBannerMessages() {
-        localUiState.update { it.copy(statusMsg = null, errorMsg = null) }
+        localUiState.update { it.copy(statusMsg = null, errorMsg = null, errorCloudflareUrl = null) }
     }
 
     fun dismissExportJson() {
@@ -487,7 +495,9 @@ class SourcesViewModel(
 
     fun addRepository(url: String, name: String, fingerprint: String) {
         viewModelScope.launch {
-            localUiState.update { it.copy(isRefreshingRepos = true, errorMsg = null, statusMsg = null) }
+            localUiState.update {
+                it.copy(isRefreshingRepos = true, errorMsg = null, errorCloudflareUrl = null, statusMsg = null)
+            }
             val res = extRepo.addRepository(url, name, fingerprint)
             localUiState.update {
                 if (res.isSuccess) {
@@ -497,7 +507,12 @@ class SourcesViewModel(
                         statusMsg = "Repository '${saved?.displayName?.ifBlank { saved.name }}' indexed (${saved?.extensionCount ?: 0} items)."
                     )
                 } else {
-                    it.copy(isRefreshingRepos = false, errorMsg = res.exceptionOrNull()?.message ?: "Failed to add repository")
+                    val err = res.exceptionOrNull()
+                    it.copy(
+                        isRefreshingRepos = false,
+                        errorMsg = err?.message ?: "Failed to add repository",
+                        errorCloudflareUrl = NetworkErrorFormatter.extractCloudflareUrl(err)
+                    )
                 }
             }
         }
@@ -505,13 +520,18 @@ class SourcesViewModel(
 
     fun refreshRepository(repo: ExtensionRepoEntity) {
         viewModelScope.launch {
-            localUiState.update { it.copy(isRefreshingRepos = true, errorMsg = null) }
+            localUiState.update { it.copy(isRefreshingRepos = true, errorMsg = null, errorCloudflareUrl = null) }
             val res = extRepo.refreshRepository(repo)
             localUiState.update {
                 if (res.isSuccess) {
                     it.copy(isRefreshingRepos = false, statusMsg = "Refreshed ${repo.displayName.ifBlank { repo.name }}: ${res.getOrNull()} extensions.")
                 } else {
-                    it.copy(isRefreshingRepos = false, errorMsg = res.exceptionOrNull()?.message ?: "Refresh failed")
+                    val err = res.exceptionOrNull()
+                    it.copy(
+                        isRefreshingRepos = false,
+                        errorMsg = err?.message ?: "Refresh failed",
+                        errorCloudflareUrl = NetworkErrorFormatter.extractCloudflareUrl(err)
+                    )
                 }
             }
         }
@@ -519,7 +539,9 @@ class SourcesViewModel(
 
     fun refreshAllEnabledRepos(onlyFailed: Boolean = false) {
         viewModelScope.launch {
-            localUiState.update { it.copy(isRefreshingRepos = true, errorMsg = null, statusMsg = null) }
+            localUiState.update {
+                it.copy(isRefreshingRepos = true, errorMsg = null, errorCloudflareUrl = null, statusMsg = null)
+            }
             val report = extRepo.refreshAllEnabledRepos(onlyFailed)
             runCatching { extRepo.syncInstalledCompanionApps() }
             localUiState.update {
@@ -534,7 +556,8 @@ class SourcesViewModel(
                     it.copy(
                         isRefreshingRepos = false,
                         statusMsg = "Synced ${report.succeededRepos}/${report.totalAttempted} repos (${report.totalPackagesLoaded} extensions).",
-                        errorMsg = "${report.failedRepos} repo(s) failed: ${report.errorsByRepo.entries.firstOrNull()?.let { e -> "${e.key}: ${e.value}" } ?: ""}"
+                        errorMsg = "${report.failedRepos} repo(s) failed: ${report.errorsByRepo.entries.firstOrNull()?.let { e -> "${e.key}: ${e.value}" } ?: ""}",
+                        errorCloudflareUrl = report.cloudflareUrlsByRepo.values.firstOrNull()
                     )
                 }
             }
@@ -715,18 +738,34 @@ class SourcesViewModel(
         localUiState.update { it.copy(globalFilters = filters) }
     }
 
+    private data class GlobalSearchOutcome(
+        val sourceName: String,
+        val items: List<MangaCardUi>,
+        val error: String?,
+        val cloudflareUrl: String?
+    )
+
     fun executeGlobalSearch() {
         val query = localUiState.value.globalQuery.trim()
         val filters = localUiState.value.globalFilters
         viewModelScope.launch {
             if (query.isNotBlank()) mangaRepo.recordSearch(query)
-            localUiState.update { it.copy(isSearchingGlobal = true, errorMsg = null, globalErrors = emptyMap()) }
+            localUiState.update {
+                it.copy(
+                    isSearchingGlobal = true,
+                    errorMsg = null,
+                    errorCloudflareUrl = null,
+                    globalErrors = emptyMap(),
+                    globalCloudflareUrls = emptyMap()
+                )
+            }
             val prefs = prefsRepo.preferences.first()
             val sources = sourceRegistry.activeSources.first()
                 .filter { it.id !in prefs.disabledSearchSourceIds }
 
             val resultsMap = linkedMapOf<String, List<MangaCardUi>>()
             val errorsMap = linkedMapOf<String, String>()
+            val cfUrlMap = linkedMapOf<String, String>()
 
             val outcomes = sources.map { source ->
                 async(Dispatchers.IO) {
@@ -744,26 +783,31 @@ class SourcesViewModel(
                                     isDemoData = it.isDemoData
                                 )
                             }
-                            Triple(source.name, items, null as String?)
+                            GlobalSearchOutcome(source.name, items, null, null)
                         }
                     } catch (ce: CancellationException) {
                         throw ce
                     } catch (t: Throwable) {
-                        Triple(source.name, emptyList(), NetworkErrorFormatter.describe(t))
+                        val desc = NetworkErrorFormatter.describe(t)
+                        val cfUrl = NetworkErrorFormatter.extractCloudflareUrl(t)
+                            ?: source.baseUrl.takeIf { it.startsWith("http", ignoreCase = true) && desc.contains("Cloudflare", ignoreCase = true) }
+                        GlobalSearchOutcome(source.name, emptyList(), desc, cfUrl)
                     }
                 }
             }.awaitAll()
 
-            outcomes.forEach { (sourceName, items, err) ->
-                if (items.isNotEmpty()) resultsMap[sourceName] = items
-                if (err != null) errorsMap[sourceName] = err
+            outcomes.forEach { outcome ->
+                if (outcome.items.isNotEmpty()) resultsMap[outcome.sourceName] = outcome.items
+                if (outcome.error != null) errorsMap[outcome.sourceName] = outcome.error
+                if (outcome.cloudflareUrl != null) cfUrlMap[outcome.sourceName] = outcome.cloudflareUrl
             }
 
             localUiState.update {
                 it.copy(
                     isSearchingGlobal = false,
                     globalResults = resultsMap,
-                    globalErrors = errorsMap
+                    globalErrors = errorsMap,
+                    globalCloudflareUrls = cfUrlMap
                 )
             }
         }
@@ -811,6 +855,7 @@ class SourcesViewModel(
             browseState.value = BrowseSourceUiState(
                 sourceId = sourceId,
                 sourceName = adapter.name,
+                sourceBaseUrl = adapter.baseUrl,
                 mode = "popular",
                 preferences = prefs,
                 supportsLogin = adapter.supportsLogin,
@@ -850,12 +895,20 @@ class SourcesViewModel(
             browseState.update {
                 it.copy(
                     isLoading = false,
-                    error = "Source '${current.sourceName.ifBlank { current.sourceId }}' is not active."
+                    error = "Source '${current.sourceName.ifBlank { current.sourceId }}' is not active.",
+                    cloudflareUrl = null
                 )
             }
             return
         }
-        browseState.update { it.copy(isLoading = true, error = null) }
+        browseState.update {
+            it.copy(
+                sourceBaseUrl = adapter.baseUrl.ifBlank { it.sourceBaseUrl },
+                isLoading = true,
+                error = null,
+                cloudflareUrl = null
+            )
+        }
         try {
             val res = withContext(Dispatchers.IO) {
                 withTimeout(35_000L) {
@@ -883,6 +936,7 @@ class SourcesViewModel(
                     isLoading = false,
                     page = page,
                     hasNextPage = res.hasNextPage,
+                    cloudflareUrl = null,
                     items = if (append) (it.items + newCards).distinctBy { c -> c.id } else newCards
                 )
             }
@@ -892,8 +946,11 @@ class SourcesViewModel(
             runCatching {
                 Log.w("KiyomiSource", "loadSourcePage failed id=${current.sourceId} mode=${current.mode} page=$page: ${t.javaClass.simpleName}: ${t.message}")
             }
+            val desc = NetworkErrorFormatter.describe(t)
+            val cfUrl = NetworkErrorFormatter.extractCloudflareUrl(t)
+                ?: adapter.baseUrl.takeIf { it.startsWith("http", ignoreCase = true) && desc.contains("Cloudflare", ignoreCase = true) }
             browseState.update {
-                it.copy(isLoading = false, error = NetworkErrorFormatter.describe(t))
+                it.copy(isLoading = false, error = desc, cloudflareUrl = cfUrl)
             }
         }
     }

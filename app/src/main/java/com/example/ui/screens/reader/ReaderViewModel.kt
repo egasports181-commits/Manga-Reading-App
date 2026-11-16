@@ -33,6 +33,7 @@ data class ReaderUiState(
     val bookmarkedPages: Set<Int> = emptySet(),
     val isLoading: Boolean = true,
     val error: String? = null,
+    val cloudflareUrl: String? = null,
     val isOfflineChapter: Boolean = false,
     // Active Settings
     val readingMode: ReadingMode = ReadingMode.RIGHT_TO_LEFT,
@@ -75,6 +76,7 @@ class ReaderViewModel(
         val currentPage: Int = 0,
         val isLoading: Boolean = true,
         val error: String? = null,
+        val cloudflareUrl: String? = null,
         val isOffline: Boolean = false
     )
 
@@ -100,6 +102,7 @@ class ReaderViewModel(
             bookmarkedPages = bookmarks,
             isLoading = cache.isLoading,
             error = cache.error,
+            cloudflareUrl = cache.cloudflareUrl,
             isOfflineChapter = cache.isOffline,
             readingMode = prefs.defaultReadingMode,
             effectiveMode = effective,
@@ -182,7 +185,8 @@ class ReaderViewModel(
                 }
                 loadState.value = LoadCache(
                     isLoading = false,
-                    error = NetworkErrorFormatter.describe(t)
+                    error = NetworkErrorFormatter.describe(t),
+                    cloudflareUrl = NetworkErrorFormatter.extractCloudflareUrl(t)
                 )
             }
         }

@@ -2,6 +2,7 @@ package com.example.network
 
 import android.util.Log
 import eu.kanade.tachiyomi.network.interceptor.CloudflareBypassRequiredException
+import eu.kanade.tachiyomi.network.interceptor.CloudflareInterceptor
 import okhttp3.Response
 import org.json.JSONArray
 import org.json.JSONException
@@ -49,15 +50,6 @@ object HttpResponseValidator {
         "<svg",
         "<?xml",
         "<error"
-    )
-
-    private val CLOUDFLARE_MARKERS = listOf(
-        "just a moment...",
-        "_cf_chl_",
-        "challenge-platform",
-        "cf-browser-verification",
-        "attention required! | cloudflare",
-        "enable javascript and cookies to continue"
     )
 
     private val TITLE_REGEX = Regex("(?is)<title[^>]*>(.*?)</title>")
@@ -400,13 +392,10 @@ object HttpResponseValidator {
         contentType: String?,
         bodySample: String
     ): Boolean {
-        val isCfServer = serverHeader.contains("cloudflare", ignoreCase = true)
-        if (cfMitigated.equals("challenge", ignoreCase = true)) return true
-        val lower = bodySample.lowercase()
-        val hasCfMarker = CLOUDFLARE_MARKERS.any { lower.contains(it) }
-        if (hasCfMarker && (isCfServer || isHtmlOrXmlPayload(bodySample, contentType))) {
+        if (CloudflareInterceptor.isCloudflareChallengePayload(statusCode, serverHeader, cfMitigated, contentType, bodySample)) {
             return true
         }
+        val isCfServer = serverHeader.contains("cloudflare", ignoreCase = true)
         return (statusCode == 403 || statusCode == 503) && isCfServer && isHtmlOrXmlPayload(bodySample, contentType)
     }
 

@@ -63,6 +63,7 @@ import com.example.ui.components.KomaCircularGlassButton
 import com.example.ui.components.KomaElevatedCard
 import com.example.ui.components.LiquidGlassFloatingPill
 import com.example.ui.components.LiquidGlassSurface
+import com.example.ui.components.rememberCloudflareWebViewLauncher
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -113,6 +114,9 @@ fun ReaderScreen(
     onBack: () -> Unit
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val launchWebView = rememberCloudflareWebViewLauncher {
+        state.chapter?.let { viewModel.loadChapter(it.id) }
+    }
     var showOverlay by remember { mutableStateOf(true) }
     var showSettingsSheet by remember { mutableStateOf(false) }
     var showChaptersSheet by remember { mutableStateOf(false) }
@@ -245,7 +249,10 @@ fun ReaderScreen(
                 ) {
                     ErrorRetryBanner(
                         message = state.error!!,
-                        onRetry = { state.chapter?.let { viewModel.loadChapter(it.id) } }
+                        onRetry = { state.chapter?.let { viewModel.loadChapter(it.id) } },
+                        onOpenWebView = state.cloudflareUrl?.let { cfUrl ->
+                            { launchWebView(cfUrl, state.manga?.sourceName ?: "Source") }
+                        }
                     )
                     OutlinedButton(onClick = onBack, shape = CircleShape) {
                         Text("Back to Manga")
@@ -800,6 +807,11 @@ private fun RetryablePageImage(
             val reason = remember(errorState.result.throwable, hostHint) {
                 NetworkErrorFormatter.describe(errorState.result.throwable, hostHint)
             }
+            val cfUrl = remember(errorState.result.throwable, imageUrl, reason) {
+                NetworkErrorFormatter.extractCloudflareUrl(errorState.result.throwable)
+                    ?: imageUrl.takeIf { it.startsWith("http", ignoreCase = true) && reason.contains("Cloudflare", ignoreCase = true) }
+            }
+            val launchPageWebView = rememberCloudflareWebViewLauncher { retryNonce++ }
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -836,6 +848,19 @@ private fun RetryablePageImage(
                             maxLines = 4,
                             overflow = TextOverflow.Ellipsis
                         )
+                        if (cfUrl != null) {
+                            OutlinedButton(
+                                onClick = { launchPageWebView(cfUrl, hostHint ?: "Image Host") },
+                                shape = CircleShape,
+                                modifier = Modifier
+                                    .minimumInteractiveComponentSize()
+                                    .testTag("page_error_webview_button")
+                            ) {
+                                Icon(Icons.Default.Public, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Text("Open WebView")
+                            }
+                        }
                         Button(onClick = { retryNonce++ }, shape = CircleShape) {
                             Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(Modifier.width(6.dp))

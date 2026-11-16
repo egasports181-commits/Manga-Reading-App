@@ -11,7 +11,8 @@ import okhttp3.HttpUrl
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Manages persistent HTTP cookies & session isolation per source/extension host.
+ * Manages persistent HTTP cookies & strict per-domain session isolation for Kiyomi sources
+ * and Mihon/Keiyoushi extensions.
  */
 class ExtensionSessionManager(
     private val extensionDao: ExtensionDao
@@ -25,43 +26,59 @@ class ExtensionSessionManager(
     val cookieJar: CookieJar = object : CookieJar {
         override fun saveFromResponse(url: HttpUrl, cookies: List<Cookie>) {
             if (cookies.isEmpty()) return
-            val host = url.host
-            val existing = cache.getOrPut(host) { mutableListOf() }
-            val entities = synchronized(existing) {
-                cookies.forEach { incoming ->
-                    existing.removeAll { it.name == incoming.name && it.domain == incoming.domain && it.path == incoming.path }
-                    if (incoming.expiresAt > System.currentTimeMillis()) {
-                        existing.add(incoming)
+            val now = System.currentTimeMillis()
+            val byDomain = cookies.groupBy { it.domain.lowercase() }
+
+            byDomain.forEach { (domainKey, domainCookies) ->
+                val existing = cache.getOrPut(domainKey) { mutableListOf() }
+                val entities = synchronized(existing) {
+                    existing.removeAll { it.expiresAt <= now }
+                    domainCookies.forEach { incoming ->
+                        existing.removeAll {
+                            it.name == incoming.name &&
+                                it.domain.equals(incoming.domain, ignoreCase = true) &&
+                                it.path == incoming.path
+                        }
+                        if (incoming.expiresAt > now) {
+                            existing.add(incoming)
+                        }
+                    }
+                    existing.map { c ->
+                        ExtensionCookieEntity(
+                            host = domainKey,
+                            name = c.name,
+                            value = c.value,
+                            domain = c.domain,
+                            path = c.path,
+                            expiresAt = c.expiresAt,
+                            secure = c.secure,
+                            httpOnly = c.httpOnly
+                        )
                     }
                 }
-                existing.map { c ->
-                    ExtensionCookieEntity(
-                        host = host,
-                        name = c.name,
-                        value = c.value,
-                        domain = c.domain,
-                        path = c.path,
-                        expiresAt = c.expiresAt,
-                        secure = c.secure,
-                        httpOnly = c.httpOnly
-                    )
+                if (entities.isEmpty()) {
+                    cache.remove(domainKey, existing)
                 }
-            }
-            ioScope.launch {
-                runCatching {
-                    extensionDao.deleteCookiesForHost(host)
-                    if (entities.isNotEmpty()) extensionDao.insertCookies(entities)
+                ioScope.launch {
+                    runCatching {
+                        extensionDao.deleteCookiesForHost(domainKey)
+                        if (entities.isNotEmpty()) extensionDao.insertCookies(entities)
+                    }
                 }
             }
         }
 
         override fun loadForRequest(url: HttpUrl): List<Cookie> {
             val now = System.currentTimeMillis()
-            val list = cache[url.host] ?: return emptyList()
-            synchronized(list) {
-                list.removeAll { it.expiresAt <= now }
-                return list.filter { it.matches(url) }
+            val matched = mutableListOf<Cookie>()
+            for (domainKey in domainKeysForHost(url.host)) {
+                val list = cache[domainKey] ?: continue
+                synchronized(list) {
+                    list.removeAll { it.expiresAt <= now }
+                    matched.addAll(list.filter { it.matches(url) })
+                }
             }
+            return matched
         }
     }
 
@@ -75,20 +92,34 @@ class ExtensionSessionManager(
                 val builder = Cookie.Builder()
                     .name(e.name)
                     .value(e.value)
-                    .domain(e.domain)
+                    .domain(e.domain.lowercase())
                     .path(e.path)
                     .expiresAt(e.expiresAt)
                 if (e.secure) builder.secure()
                 if (e.httpOnly) builder.httpOnly()
                 builder.build()
             }.getOrNull() ?: return@forEach
-            cache.getOrPut(e.host) { mutableListOf() }.add(cookie)
+            val domainKey = cookie.domain.lowercase()
+            val list = cache.getOrPut(domainKey) { mutableListOf() }
+            synchronized(list) {
+                list.removeAll {
+                    it.name == cookie.name &&
+                        it.domain.equals(cookie.domain, ignoreCase = true) &&
+                        it.path == cookie.path
+                }
+                list.add(cookie)
+            }
         }
     }
 
     suspend fun clearCookiesForHost(host: String) {
+        val norm = host.trim().lowercase()
+        cache.remove(norm)
         cache.remove(host)
-        extensionDao.deleteCookiesForHost(host)
+        extensionDao.deleteCookiesForHost(norm)
+        if (norm != host) {
+            extensionDao.deleteCookiesForHost(host)
+        }
     }
 
     suspend fun clearAllCookies() {
@@ -96,5 +127,28 @@ class ExtensionSessionManager(
         extensionDao.clearAllCookies()
     }
 
-    fun getCookieCountForHost(host: String): Int = cache[host]?.size ?: 0
+    fun getCookieCountForHost(host: String): Int =
+        domainKeysForHost(host).sumOf { key ->
+            val now = System.currentTimeMillis()
+            cache[key]?.let { list ->
+                synchronized(list) { list.count { it.expiresAt > now } }
+            } ?: 0
+        }
+
+    companion object {
+        internal fun domainKeysForHost(host: String): List<String> {
+            val norm = host.trim().lowercase().trimEnd('.')
+            if (norm.isEmpty()) return emptyList()
+            val keys = mutableListOf(norm)
+            var idx = norm.indexOf('.')
+            while (idx >= 0) {
+                val suffix = norm.substring(idx + 1)
+                if ('.' in suffix) {
+                    keys.add(suffix)
+                }
+                idx = norm.indexOf('.', idx + 1)
+            }
+            return keys
+        }
+    }
 }

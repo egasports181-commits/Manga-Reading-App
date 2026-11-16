@@ -80,7 +80,8 @@ data class RepoBatchRefreshReport(
     val succeededRepos: Int,
     val failedRepos: Int,
     val totalPackagesLoaded: Int,
-    val errorsByRepo: Map<String, String> = emptyMap()
+    val errorsByRepo: Map<String, String> = emptyMap(),
+    val cloudflareUrlsByRepo: Map<String, String> = emptyMap()
 )
 
 class ExtensionRepositoryManager(
@@ -345,6 +346,7 @@ class ExtensionRepositoryManager(
         var failed = 0
         var totalPackages = 0
         val errors = linkedMapOf<String, String>()
+        val cloudflareUrls = linkedMapOf<String, String>()
         for (repo in repos) {
             val res = refreshRepository(repo)
             if (res.isSuccess) {
@@ -352,8 +354,11 @@ class ExtensionRepositoryManager(
                 totalPackages += res.getOrDefault(0)
             } else {
                 failed++
-                errors[repo.displayName.ifBlank { repo.name }] =
-                    res.exceptionOrNull()?.message ?: "Refresh failed"
+                val repoLabel = repo.displayName.ifBlank { repo.name }
+                errors[repoLabel] = res.exceptionOrNull()?.message ?: "Refresh failed"
+                NetworkErrorFormatter.extractCloudflareUrl(res.exceptionOrNull())?.let { cfUrl ->
+                    cloudflareUrls[repoLabel] = cfUrl
+                }
             }
         }
         return RepoBatchRefreshReport(
@@ -361,7 +366,8 @@ class ExtensionRepositoryManager(
             succeededRepos = succeeded,
             failedRepos = failed,
             totalPackagesLoaded = totalPackages,
-            errorsByRepo = errors
+            errorsByRepo = errors,
+            cloudflareUrlsByRepo = cloudflareUrls
         )
     }
 

@@ -25,6 +25,7 @@ data class FavoriteSourceQuickItem(
 data class HomeUiState(
     val isLoadingLiveFeeds: Boolean = false,
     val feedError: String? = null,
+    val feedCloudflareUrl: String? = null,
     val demoModeEnabled: Boolean = false,
     val compactCards: Boolean = false,
     val sectionOrder: List<HomeSectionType> = HomeSectionType.defaultOrder(),
@@ -53,6 +54,7 @@ class HomeViewModel(
     private data class LiveFeedCache(
         val isLoading: Boolean = false,
         val error: String? = null,
+        val cloudflareUrl: String? = null,
         val popular: List<MangaCardUi> = emptyList(),
         val trending: List<MangaCardUi> = emptyList(),
         val latest: List<MangaCardUi> = emptyList(),
@@ -127,6 +129,7 @@ class HomeViewModel(
         HomeUiState(
             isLoadingLiveFeeds = live.isLoading,
             feedError = live.error,
+            feedCloudflareUrl = live.cloudflareUrl,
             demoModeEnabled = prefs.demoModeEnabled,
             compactCards = prefs.homeCompactCards,
             sectionOrder = orderedTypes,
@@ -151,7 +154,7 @@ class HomeViewModel(
 
     fun refreshLiveFeeds() {
         viewModelScope.launch {
-            liveFeedState.update { it.copy(isLoading = true, error = null) }
+            liveFeedState.update { it.copy(isLoading = true, error = null, cloudflareUrl = null) }
             try {
                 val prefs = prefsRepo.preferences.first()
                 val sources = sourceRegistry.activeSources.first()
@@ -205,7 +208,8 @@ class HomeViewModel(
                 liveFeedState.update {
                     it.copy(
                         isLoading = false,
-                        error = NetworkErrorFormatter.describe(t)
+                        error = NetworkErrorFormatter.describe(t),
+                        cloudflareUrl = NetworkErrorFormatter.extractCloudflareUrl(t)
                     )
                 }
             }

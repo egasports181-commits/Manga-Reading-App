@@ -1,5 +1,9 @@
 package com.example.ui.components
 
+import android.app.Activity
+import android.content.Intent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
@@ -14,6 +18,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
@@ -30,6 +35,8 @@ import androidx.compose.ui.unit.dp
 import coil.compose.SubcomposeAsyncImage
 import com.example.R
 import com.example.domain.model.MangaStatus
+import com.example.network.CloudflareChallengeCoordinator
+import com.example.network.KomaDns
 import com.example.ui.theme.StatusCompleted
 import com.example.ui.theme.StatusHiatus
 import com.example.ui.theme.StatusOngoing
@@ -786,10 +793,37 @@ fun DemoModeBanner(
 }
 
 @Composable
+fun rememberCloudflareWebViewLauncher(
+    userAgent: String = KomaDns.USER_AGENT,
+    onVerified: () -> Unit
+): (url: String, sourceName: String) -> Unit {
+    val context = LocalContext.current
+    val launcher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            onVerified()
+        }
+    }
+    return { url, sourceName ->
+        val intent: Intent = CloudflareChallengeCoordinator.createVerificationIntent(
+            context = context,
+            url = url,
+            sourceName = sourceName,
+            userAgent = userAgent,
+            isManual = true
+        )
+        runCatching { launcher.launch(intent) }
+    }
+}
+
+@Composable
 fun ErrorRetryBanner(
     message: String,
     onRetry: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onOpenWebView: (() -> Unit)? = null,
+    openWebViewLabel: String = "Open WebView"
 ) {
     Surface(
         modifier = modifier
@@ -799,42 +833,108 @@ fun ErrorRetryBanner(
         shape = RoundedCornerShape(18.dp),
         border = BorderStroke(0.75.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.45f))
     ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Row(
-                modifier = Modifier.weight(1f),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
+        if (onOpenWebView != null) {
+            Column(
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Surface(
-                    color = MaterialTheme.colorScheme.error.copy(alpha = 0.16f),
-                    shape = CircleShape,
-                    modifier = Modifier.size(34.dp)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    Box(contentAlignment = Alignment.Center) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.error.copy(alpha = 0.16f),
+                        shape = CircleShape,
+                        modifier = Modifier.size(34.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                Icons.Default.WifiOff,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+                    Text(
+                        text = message,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onBackground,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Button(
+                        onClick = onOpenWebView,
+                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+                        modifier = Modifier
+                            .minimumInteractiveComponentSize()
+                            .testTag("error_webview_button")
+                    ) {
                         Icon(
-                            Icons.Default.WifiOff,
+                            imageVector = Icons.Default.Public,
                             contentDescription = null,
-                            tint = MaterialTheme.colorScheme.error,
-                            modifier = Modifier.size(18.dp)
+                            modifier = Modifier.size(16.dp)
                         )
+                        Spacer(Modifier.width(6.dp))
+                        Text(openWebViewLabel)
+                    }
+                    FilledTonalButton(
+                        onClick = onRetry,
+                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+                        modifier = Modifier
+                            .minimumInteractiveComponentSize()
+                            .testTag("error_retry_button")
+                    ) {
+                        Text("Retry")
                     }
                 }
-                Text(
-                    text = message,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onBackground
-                )
             }
-            Spacer(Modifier.width(8.dp))
-            FilledTonalButton(
-                onClick = onRetry,
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+        } else {
+            Row(
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Text("Retry")
+                Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.error.copy(alpha = 0.16f),
+                        shape = CircleShape,
+                        modifier = Modifier.size(34.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                Icons.Default.WifiOff,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+                    Text(
+                        text = message,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onBackground
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
+                FilledTonalButton(
+                    onClick = onRetry,
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                    modifier = Modifier
+                        .minimumInteractiveComponentSize()
+                        .testTag("error_retry_button")
+                ) {
+                    Text("Retry")
+                }
             }
         }
     }

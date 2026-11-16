@@ -51,6 +51,7 @@ import com.example.ui.components.LiquidGlassSurface
 import com.example.ui.components.LiquidGlassTopBar
 import com.example.ui.components.MangaCardUi
 import com.example.ui.components.MangaCoverCard
+import com.example.ui.components.rememberCloudflareWebViewLauncher
 import com.example.ui.theme.StatusCompleted
 import com.example.ui.theme.StatusError
 import com.example.ui.theme.StatusHiatus
@@ -73,6 +74,12 @@ fun SourcesScreen(
     var inspectPackage by remember { mutableStateOf<ExtensionPackageEntity?>(null) }
 
     val context = LocalContext.current
+    val repoWebViewLauncher = rememberCloudflareWebViewLauncher {
+        viewModel.refreshAllEnabledRepos(onlyFailed = true)
+    }
+    val searchWebViewLauncher = rememberCloudflareWebViewLauncher {
+        viewModel.executeGlobalSearch()
+    }
     LaunchedEffect(viewModel) {
         viewModel.osActionIntents.collect { intent ->
             runCatching { context.startActivity(intent) }
@@ -206,26 +213,48 @@ fun SourcesScreen(
                     shape = RoundedCornerShape(16.dp),
                     border = BorderStroke(0.75.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.45f))
                 ) {
-                    Row(
+                    Column(
                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Icon(
-                            Icons.Default.ErrorOutline,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.error,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(Modifier.width(10.dp))
-                        Text(
-                            err,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.error,
-                            modifier = Modifier.weight(1f)
-                        )
-                        IconButton(onClick = viewModel::clearBannerMessages, modifier = Modifier.size(28.dp)) {
-                            Icon(Icons.Default.Close, contentDescription = "Dismiss", modifier = Modifier.size(16.dp))
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Icon(
+                                Icons.Default.ErrorOutline,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(Modifier.width(10.dp))
+                            Text(
+                                err,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.weight(1f)
+                            )
+                            IconButton(onClick = viewModel::clearBannerMessages, modifier = Modifier.size(28.dp)) {
+                                Icon(Icons.Default.Close, contentDescription = "Dismiss", modifier = Modifier.size(16.dp))
+                            }
+                        }
+                        state.errorCloudflareUrl?.let { cfUrl ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.End
+                            ) {
+                                FilledTonalButton(
+                                    onClick = { repoWebViewLauncher(cfUrl, "Repository") },
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                                    modifier = Modifier
+                                        .minimumInteractiveComponentSize()
+                                        .testTag("sources_error_webview_button")
+                                ) {
+                                    Icon(Icons.Default.Public, contentDescription = null, modifier = Modifier.size(15.dp))
+                                    Spacer(Modifier.width(6.dp))
+                                    Text("Open WebView")
+                                }
+                            }
                         }
                     }
                 }
@@ -252,7 +281,8 @@ fun SourcesScreen(
                         viewModel.updateGlobalQuery(it)
                         viewModel.executeGlobalSearch()
                     },
-                    onOpenMangaCard = { card -> viewModel.openSourceManga(card, onOpenManga) }
+                    onOpenMangaCard = { card -> viewModel.openSourceManga(card, onOpenManga) },
+                    onOpenCloudflareWebView = searchWebViewLauncher
                 )
                 2 -> ExtensionsManagerTab(
                     state = state,
@@ -617,7 +647,8 @@ private fun GlobalSearchTab(
     onToggleSaveSearch: (com.example.data.local.entity.SearchHistoryEntity) -> Unit,
     onDeleteSearch: (Long) -> Unit,
     onSelectHistory: (String) -> Unit,
-    onOpenMangaCard: (MangaCardUi) -> Unit
+    onOpenMangaCard: (MangaCardUi) -> Unit,
+    onOpenCloudflareWebView: (url: String, sourceName: String) -> Unit
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
         LiquidGlassSurface(
@@ -731,19 +762,39 @@ private fun GlobalSearchTab(
                         verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         state.globalSourceErrors.forEach { (src, err) ->
+                            val cfUrl = state.globalSourceCloudflareUrls[src]
                             Surface(
                                 color = MaterialTheme.colorScheme.error.copy(alpha = 0.12f),
                                 shape = RoundedCornerShape(14.dp),
                                 border = BorderStroke(0.75.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.35f))
                             ) {
-                                Text(
-                                    "$src: $err",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = StatusError,
+                                Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .padding(12.dp)
-                                )
+                                        .padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Text(
+                                        "$src: $err",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = StatusError,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    if (cfUrl != null) {
+                                        FilledTonalButton(
+                                            onClick = { onOpenCloudflareWebView(cfUrl, src) },
+                                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                                            modifier = Modifier
+                                                .minimumInteractiveComponentSize()
+                                                .testTag("global_search_webview_$src")
+                                        ) {
+                                            Icon(Icons.Default.Public, contentDescription = null, modifier = Modifier.size(14.dp))
+                                            Spacer(Modifier.width(4.dp))
+                                            Text("Open WebView")
+                                        }
+                                    }
+                                }
                             }
                         }
                     }

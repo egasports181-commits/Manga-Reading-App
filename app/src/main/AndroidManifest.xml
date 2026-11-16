@@ -52,6 +52,13 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".ui.screens.webview.CloudflareWebViewActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"
+            android:exported="false"
+            android:label="Cloudflare Verification"
+            android:theme="@style/Theme.Koma" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

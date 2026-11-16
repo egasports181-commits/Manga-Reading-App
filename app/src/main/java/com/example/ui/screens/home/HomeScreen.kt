@@ -74,6 +74,7 @@ fun HomeScreen(
     onNavigateToUpdates: () -> Unit = {}
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val launchWebView = rememberCloudflareWebViewLauncher { viewModel.refreshLiveFeeds() }
     var showCustomizeSheet by remember { mutableStateOf(false) }
     var selectedCategory by remember { mutableStateOf(HomeCategoryTab.MANGAS) }
     var selectedSubFilter by remember { mutableStateOf(HomeSubFilter.MANGA_CHART) }
@@ -275,7 +276,10 @@ fun HomeScreen(
                 item(key = "home_error_banner") {
                     ErrorRetryBanner(
                         message = state.feedError!!,
-                        onRetry = viewModel::refreshLiveFeeds
+                        onRetry = viewModel::refreshLiveFeeds,
+                        onOpenWebView = state.feedCloudflareUrl?.let { cfUrl ->
+                            { launchWebView(cfUrl, "Home Feed") }
+                        }
                     )
                 }
             }

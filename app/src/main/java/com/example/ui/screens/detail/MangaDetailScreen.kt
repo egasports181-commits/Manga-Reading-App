@@ -41,6 +41,7 @@ import com.example.domain.model.*
 import com.example.ui.components.ChapterListSkeleton
 import com.example.ui.components.ErrorRetryBanner
 import com.example.ui.components.KomaEmptyState
+import com.example.ui.components.rememberCloudflareWebViewLauncher
 import com.example.ui.theme.DetailCrimsonMid
 import com.example.ui.theme.DetailCrimsonTop
 import com.example.ui.theme.DetailObsidian
@@ -71,6 +72,7 @@ fun MangaDetailScreen(
     onOpenReader: (mangaId: String, chapterId: String) -> Unit
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val launchWebView = rememberCloudflareWebViewLauncher { viewModel.refresh() }
     val manga = state.manga
     var expandSynopsis by remember { mutableStateOf(false) }
     var showCategoryDialog by remember { mutableStateOf(false) }
@@ -479,7 +481,13 @@ fun MangaDetailScreen(
             state.error?.let { err ->
                 item(key = "detail_error_banner") {
                     Box(modifier = Modifier.padding(vertical = 6.dp)) {
-                        ErrorRetryBanner(message = err, onRetry = viewModel::refresh)
+                        ErrorRetryBanner(
+                            message = err,
+                            onRetry = viewModel::refresh,
+                            onOpenWebView = state.cloudflareUrl?.let { cfUrl ->
+                                { launchWebView(cfUrl, manga.sourceName) }
+                            }
+                        )
                     }
                 }
             }
